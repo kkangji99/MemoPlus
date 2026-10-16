@@ -341,6 +341,9 @@ public class QuickMemo {
         long createdAt = nowTicks();
         long updatedAt = createdAt;
         Long deletedAt;
+        String importedFrom;           // Windows 스티커 메모에서 가져온 경우 원본 Note.Id (중복 가져오기 방지)
+        boolean favorite;              // 즐겨찾기: 메모 목록 위쪽에 고정
+        Long order;                    // 메모 목록 순서 (작을수록 위). null 이면 최근 수정 순
 
         boolean deleted() { return deletedAt != null; }
     }
@@ -349,6 +352,21 @@ public class QuickMemo {
     /** 원본 plum.sqlite 의 Text 형식을 따른 직렬화: 문단마다 "[bs]id=GUID " + [bs]b [bs]i [bs]ul [bs]strike (끄기는 0 접미), 글머리 [bs]l  ([bs] = 백슬래시) */
     static final class Markup {
         static final String BULLET = "• ";
+        /** 들여쓰기 단계별 글머리 (맑은 고딕에서 표시되는 기호만 사용). 단계당 공백 4칸 */
+        static final String[] BULLET_MARKS = {"•", "–", "·"};
+        static final String INDENT = "    ";
+        static final int MAX_DEPTH = 5;
+        static final Pattern BULLET_PREFIX = Pattern.compile("^((?: {4})*)[•–·] ");
+
+        static String bulletPrefix(int depth) {
+            return INDENT.repeat(depth) + BULLET_MARKS[depth % BULLET_MARKS.length] + " ";
+        }
+
+        /** 문단 글이 글머리로 시작하면 {깊이, 접두어 길이}, 아니면 null */
+        static int[] bulletOf(String paraText) {
+            Matcher m = BULLET_PREFIX.matcher(paraText);
+            return m.find() ? new int[]{m.group(1).length() / INDENT.length(), m.end()} : null;
+        }
         /** 문서 안 이미지 요소에 붙는 미디어 ID 속성 (이미지는 [bs]img=ID 토큰으로 저장) */
         static final Object MEDIA = "quickmemo.media";
         static final Pattern IMG = Pattern.compile("(?<!\\\\)\\\\img=([0-9a-fA-F\\-]+)");
@@ -365,13 +383,15 @@ public class QuickMemo {
 
         /** 할 일 항목 체크박스 요소에 붙는 속성 (값: 완료 여부 Boolean). 저장 토큰은 [bs]todo / [bs]done */
         static final Object TODO = "quickmemo.todo";
-        static final Pattern TODO_TOKEN = Pattern.compile("^(\\\\id=\\S+ )?\\\\(todo|done) ");
+        /** 할 일 항목의 들여쓰기 단계 (Integer). 저장 토큰은 [bs]todo2 처럼 숫자 접미 */
+        static final Object TODO_DEPTH = "quickmemo.todoDepth";
+        static final Pattern TODO_TOKEN = Pattern.compile("^(\\\\id=\\S+ )?\\\\(todo|done)([1-5])? ");
         static final Pattern STRIKE_TOKEN = Pattern.compile("(?<!\\\\)\\\\strike0? ");
 
         /** todo: 0 = 일반 문단, 1 = 할 일, 2 = 완료 */
-        record Para(boolean bullet, int todo, List<Run> runs) {
+        record Para(boolean bullet, int depth, int todo, List<Run> runs) {
             String plain() {
-                StringBuilder sb = new StringBuilder(todo == 1 ? "□ " : todo == 2 ? "▣ " : bullet ? BULLET : "");
+                StringBuilder sb = new StringBuilder(todo > 0 ? INDENT.repeat(depth) + (todo == 1 ? "□ " : "▣ ") : bullet ? bulletPrefix(depth) : "");
                 for (Run r : runs) sb.append(r.text);
                 return sb.toString();
             }
@@ -387,13 +407,17 @@ public class QuickMemo {
                     int pe = Math.min(para.getEndOffset() - 1, doc.getLength());
                     String ptext = doc.getText(ps, pe - ps);
                     Boolean todo = todoState(doc, ps);
-                    boolean bullet = todo == null && ptext.startsWith(BULLET);
-                    int cs = ps + (todo != null ? 1 : bullet ? BULLET.length() : 0);
+                    int[] bl = todo == null ? bulletOf(ptext) : null;
+                    boolean bullet = bl != null;
+                    int cs = ps + (todo != null ? 1 : bullet ? bl[1] : 0);
 
                     if (p > 0) sb.append('\n');
                     sb.append("\\id=").append(UUID.randomUUID()).append(' ');
-                    if (todo != null) sb.append(todo ? "\\done " : "\\todo ");
-                    if (bullet) sb.append("\\l ");
+                    if (todo != null) {
+                        int td = todoDepth(doc, ps);
+                        sb.append(todo ? "\\done" : "\\todo").append(td > 0 ? String.valueOf(td) : "").append(' ');
+                    }
+                    if (bullet) sb.append(bl[0] == 0 ? "\\l " : "\\l" + bl[0] + " ");
 
                     boolean b = false, i = false, u = false, s = false;
                     for (int k = 0; k < para.getElementCount(); k++) {
@@ -432,7 +456,7 @@ public class QuickMemo {
             List<Run> runs = new ArrayList<>();
             StringBuilder cur = new StringBuilder();
             boolean b = false, it = false, u = false, s = false, bullet = false;
-            int todo = 0;
+            int todo = 0, depth = 0;
             int n = line.length(), i = 0;
             while (i < n) {
                 char c = line.charAt(i);
@@ -454,9 +478,12 @@ public class QuickMemo {
                         case "ul0" -> u = false;
                         case "strike" -> s = true;
                         case "strike0" -> s = false;
-                        case "l" -> bullet = true;
-                        case "todo" -> todo = 1;
-                        case "done" -> todo = 2;
+                        case "l" -> { bullet = true; depth = 0; }
+                        case "l1", "l2", "l3", "l4", "l5" -> { bullet = true; depth = tok.charAt(1) - '0'; }
+                        case "todo" -> { todo = 1; depth = 0; }
+                        case "done" -> { todo = 2; depth = 0; }
+                        case "todo1", "todo2", "todo3", "todo4", "todo5" -> { todo = 1; depth = tok.charAt(4) - '0'; }
+                        case "done1", "done2", "done3", "done4", "done5" -> { todo = 2; depth = tok.charAt(4) - '0'; }
                         case "ltrpar", "rtlpar" -> { }
                         default -> known = false;
                     }
@@ -466,7 +493,7 @@ public class QuickMemo {
                 i++;
             }
             if (cur.length() > 0) runs.add(new Run(cur.toString(), b, it, u, s, null));
-            return new Para(bullet && todo == 0, todo, runs);
+            return new Para(bullet && todo == 0, depth, todo, runs);
         }
 
         /** 0 = 일반, 1 = 할 일, 2 = 완료 (직렬화된 한 줄 기준) */
@@ -476,11 +503,20 @@ public class QuickMemo {
         }
 
         /** 한 줄의 할 일 상태를 바꾼다. 완료면 내용 전체에 취소선, 아니면 취소선 제거 */
+        /** 할 일 줄의 들여쓰기 단계 (직렬화된 한 줄 기준) */
+        static int todoDepthOf(String line) {
+            Matcher m = TODO_TOKEN.matcher(line);
+            return m.find() && m.group(3) != null ? m.group(3).charAt(0) - '0' : 0;
+        }
+
+        /** 한 줄의 할 일 상태를 바꾼다(단계 유지). 완료면 내용 전체에 취소선, 아니면 취소선 제거 */
         static String withTodo(String line, boolean done) {
+            int depth = todoDepthOf(line);
             Matcher m = TODO_TOKEN.matcher(line);
             String rest = m.find() ? line.substring(m.end()) : line.replaceFirst("^\\\\id=\\S+ ", "");
             rest = STRIKE_TOKEN.matcher(rest).replaceAll("");
-            return "\\id=" + UUID.randomUUID() + " " + (done ? "\\done \\strike " : "\\todo ") + rest;
+            String tok = (done ? "\\done" : "\\todo") + (depth > 0 ? String.valueOf(depth) : "") + " ";
+            return "\\id=" + UUID.randomUUID() + " " + tok + (done ? "\\strike " : "") + rest;
         }
 
         /** 문단 시작 위치의 체크박스 상태 (체크박스가 없으면 null) */
@@ -491,10 +527,18 @@ public class QuickMemo {
             return v instanceof Boolean bv && StyleConstants.getIcon(a) != null ? bv : null;
         }
 
-        static SimpleAttributeSet todoAttrs(boolean done) {
+        static int todoDepth(StyledDocument doc, int paraStart) {
+            if (paraStart >= doc.getLength()) return 0;
+            return doc.getCharacterElement(paraStart).getAttributes().getAttribute(TODO_DEPTH) instanceof Integer d ? d : 0;
+        }
+
+        static SimpleAttributeSet todoAttrs(boolean done) { return todoAttrs(done, 0); }
+
+        static SimpleAttributeSet todoAttrs(boolean done, int depth) {
             SimpleAttributeSet a = new SimpleAttributeSet();
-            StyleConstants.setIcon(a, new CheckIcon(done));
+            StyleConstants.setIcon(a, new CheckIcon(done, depth));
             a.addAttribute(TODO, done);
+            a.addAttribute(TODO_DEPTH, depth);
             return a;
         }
 
@@ -511,8 +555,12 @@ public class QuickMemo {
                 for (int p = 0; p < paras.size(); p++) {
                     Para para = paras.get(p);
                     if (p > 0) { doc.insertString(pos, "\n", null); pos++; }
-                    if (para.todo > 0) { doc.insertString(pos, " ", todoAttrs(para.todo == 2)); pos++; }
-                    if (para.bullet) { doc.insertString(pos, BULLET, null); pos += BULLET.length(); }
+                    if (para.todo > 0) { doc.insertString(pos, " ", todoAttrs(para.todo == 2, para.depth)); pos++; }
+                    if (para.bullet) {
+                        String pre = bulletPrefix(para.depth);
+                        doc.insertString(pos, pre, null);
+                        pos += pre.length();
+                    }
                     for (Run r : para.runs) {
                         if (r.media != null) {
                             doc.insertString(pos, " ", imageAttrs(r.media, resolver.apply(r.media)));
@@ -548,6 +596,195 @@ public class QuickMemo {
                 sb.append(paras.get(p).plain());
             }
             return sb.toString();
+        }
+    }
+
+    // ===================================================================== Windows 스티커 메모 가져오기
+    /**
+     * 외부 라이브러리 없이 SQLite 파일을 읽는 최소 리더 (읽기 전용).
+     * 테이블 B-트리, 오버플로 페이지, WAL(커밋된 프레임) 을 지원한다. UTF-8 DB 만 처리.
+     */
+    static final class SqliteReader {
+        final byte[] db;
+        final int pageSize, usable;
+        final Map<Integer, byte[]> wal = new HashMap<>();
+
+        SqliteReader(Path dbFile, Path walFile) throws IOException {
+            db = Files.readAllBytes(dbFile);
+            if (db.length < 100 || !new String(db, 0, 15, StandardCharsets.US_ASCII).equals("SQLite format 3"))
+                throw new IOException("SQLite 파일이 아닙니다.");
+            int ps = u16(db, 16);
+            pageSize = ps == 1 ? 65536 : ps;
+            usable = pageSize - (db[20] & 0xff);
+            if (u32(db, 56) > 1) throw new IOException("UTF-8 이 아닌 SQLite 파일은 지원하지 않습니다.");
+            if (walFile != null && Files.exists(walFile)) readWal(Files.readAllBytes(walFile));
+        }
+
+        static int u16(byte[] b, int o) { return ((b[o] & 0xff) << 8) | (b[o + 1] & 0xff); }
+        static int u32(byte[] b, int o) { return (u16(b, o) << 16) | u16(b, o + 2); }
+
+        /** 헤더 salt 가 맞는 프레임만, 커밋 프레임까지 묶어서 반영 */
+        void readWal(byte[] w) {
+            if (w.length < 32 || (u32(w, 0) & 0xFFFFFFFE) != 0x377f0682 || u32(w, 8) != pageSize) return;
+            int s1 = u32(w, 16), s2 = u32(w, 20);
+            Map<Integer, byte[]> pending = new HashMap<>();
+            for (int off = 32; off + 24 + pageSize <= w.length; off += 24 + pageSize) {
+                if (u32(w, off + 8) != s1 || u32(w, off + 12) != s2) break;
+                pending.put(u32(w, off), Arrays.copyOfRange(w, off + 24, off + 24 + pageSize));
+                if (u32(w, off + 4) != 0) { wal.putAll(pending); pending.clear(); }
+            }
+        }
+
+        byte[] page(int n) {
+            byte[] p = wal.get(n);
+            if (p != null) return p;
+            int off = (n - 1) * pageSize;
+            return off + pageSize <= db.length ? Arrays.copyOfRange(db, off, off + pageSize) : new byte[pageSize];
+        }
+
+        /** varint: [값, 길이] */
+        static long[] varint(byte[] b, int o) {
+            long v = 0;
+            for (int i = 0; i < 8; i++) {
+                int c = b[o + i] & 0xff;
+                v = (v << 7) | (c & 0x7f);
+                if ((c & 0x80) == 0) return new long[]{v, i + 1};
+            }
+            return new long[]{(v << 8) | (b[o + 8] & 0xff), 9};
+        }
+
+        /** 테이블의 모든 행을 열 이름 → 값(Long/Double/String/byte[]/null) 으로 */
+        List<Map<String, Object>> table(String name) throws IOException {
+            String sql = null;
+            int root = 0;
+            for (Object[] r : scan(1)) {
+                if (r.length >= 5 && "table".equals(r[0]) && name.equals(r[1])) { root = ((Long) r[3]).intValue(); sql = (String) r[4]; }
+            }
+            if (sql == null) throw new IOException(name + " 테이블이 없습니다.");
+            List<String> cols = new ArrayList<>();
+            for (String def : sql.substring(sql.indexOf('(') + 1, sql.lastIndexOf(')')).split(",")) {
+                String c = def.trim().split("\\s+")[0].replaceAll("[\"`\\[\\]]", "");
+                if (!c.isEmpty() && !c.equalsIgnoreCase("primary") && !c.equalsIgnoreCase("constraint")) cols.add(c);
+            }
+            List<Map<String, Object>> out = new ArrayList<>();
+            for (Object[] r : scan(root)) {
+                Map<String, Object> m = new LinkedHashMap<>();
+                for (int i = 0; i < cols.size(); i++) m.put(cols.get(i), i < r.length ? r[i] : null);
+                out.add(m);
+            }
+            return out;
+        }
+
+        List<Object[]> scan(int root) throws IOException {
+            List<Object[]> out = new ArrayList<>();
+            scan(root, out, 0);
+            return out;
+        }
+
+        void scan(int pgno, List<Object[]> out, int depth) throws IOException {
+            if (depth > 40 || pgno < 1) throw new IOException("손상된 B-트리");
+            byte[] p = page(pgno);
+            int h = pgno == 1 ? 100 : 0;
+            int type = p[h] & 0xff, cells = u16(p, h + 3);
+            if (type == 0x0D) {
+                for (int i = 0; i < cells; i++) out.add(leafCell(p, u16(p, h + 8 + 2 * i)));
+            } else if (type == 0x05) {
+                for (int i = 0; i < cells; i++) scan(u32(p, u16(p, h + 12 + 2 * i)), out, depth + 1);
+                scan(u32(p, h + 8), out, depth + 1);
+            } else {
+                throw new IOException("지원하지 않는 페이지 형식: " + type);
+            }
+        }
+
+        Object[] leafCell(byte[] p, int off) {
+            long[] size = varint(p, off);
+            off += (int) size[1];
+            off += (int) varint(p, off)[1];            // rowid
+            int total = (int) size[0];
+            int x = usable - 35, m = ((usable - 12) * 32 / 255) - 23;
+            int local = total;
+            if (total > x) {
+                int k = m + ((total - m) % (usable - 4));
+                local = k <= x ? k : m;
+            }
+            byte[] payload = new byte[total];
+            System.arraycopy(p, off, payload, 0, local);
+            int got = local, next = local < total ? u32(p, off + local) : 0;
+            while (got < total && next > 0) {
+                byte[] ov = page(next);
+                int n = Math.min(usable - 4, total - got);
+                System.arraycopy(ov, 4, payload, got, n);
+                got += n;
+                next = u32(ov, 0);
+            }
+            return record(payload);
+        }
+
+        static Object[] record(byte[] b) {
+            long[] hs = varint(b, 0);
+            List<Long> types = new ArrayList<>();
+            for (int o = (int) hs[1]; o < hs[0]; ) {
+                long[] t = varint(b, o);
+                types.add(t[0]);
+                o += (int) t[1];
+            }
+            Object[] vals = new Object[types.size()];
+            int o = (int) hs[0];
+            for (int i = 0; i < vals.length; i++) {
+                long t = types.get(i);
+                if (t == 0) vals[i] = null;
+                else if (t >= 1 && t <= 6) {
+                    int n = t <= 4 ? (int) t : t == 5 ? 6 : 8;
+                    long v = b[o];                       // 부호 확장
+                    for (int k = 1; k < n; k++) v = (v << 8) | (b[o + k] & 0xff);
+                    vals[i] = v;
+                    o += n;
+                } else if (t == 7) {
+                    long v = 0;
+                    for (int k = 0; k < 8; k++) v = (v << 8) | (b[o + k] & 0xff);
+                    vals[i] = Double.longBitsToDouble(v);
+                    o += 8;
+                } else if (t == 8 || t == 9) vals[i] = t - 8;
+                else if (t >= 12) {
+                    int n = (int) ((t - (t % 2 == 0 ? 12 : 13)) / 2);
+                    vals[i] = t % 2 == 0 ? Arrays.copyOfRange(b, o, o + n) : new String(b, o, n, StandardCharsets.UTF_8);
+                    o += n;
+                }
+            }
+            return vals;
+        }
+    }
+
+    /** %LOCALAPPDATA% 의 Microsoft Sticky Notes 데이터(plum.sqlite) 를 읽는다 */
+    static final class StickyImport {
+        static Path source() {
+            String base = System.getenv("LOCALAPPDATA");
+            return base == null ? null : Paths.get(base, "Packages", "Microsoft.MicrosoftStickyNotes_8wekyb3d8bbwe", "LocalState", "plum.sqlite");
+        }
+
+        static boolean available() {
+            Path p = source();
+            return p != null && Files.exists(p);
+        }
+
+        /** 사용 중인 DB 를 건드리지 않도록 임시 폴더로 복사해서 읽는다. 삭제되지 않은 메모만 */
+        static List<Map<String, Object>> readNotes() throws IOException {
+            Path src = source();
+            if (src == null || !Files.exists(src)) throw new IOException("이 PC에서 Windows 스티커 메모 데이터를 찾지 못했습니다.");
+            Path tmp = Files.createTempDirectory("quickmemo-import");
+            try {
+                Path db = tmp.resolve("plum.sqlite"), wal = tmp.resolve("plum.sqlite-wal");
+                Files.copy(src, db);
+                Path srcWal = src.resolveSibling("plum.sqlite-wal");
+                if (Files.exists(srcWal)) Files.copy(srcWal, wal);
+                List<Map<String, Object>> out = new ArrayList<>();
+                for (Map<String, Object> r : new SqliteReader(db, wal).table("Note")) {
+                    if (r.get("DeletedAt") == null && r.get("Id") instanceof String) out.add(r);
+                }
+                return out;
+            } finally {
+                Updater.deleteTree(tmp);
+            }
         }
     }
 
@@ -643,6 +880,9 @@ public class QuickMemo {
                     case "CreatedAt" -> n.createdAt = Long.parseLong(v);
                     case "UpdatedAt" -> n.updatedAt = Long.parseLong(v);
                     case "DeletedAt" -> n.deletedAt = v.isEmpty() ? null : Long.parseLong(v);
+                    case "ImportedFrom" -> n.importedFrom = v.isEmpty() ? null : v;
+                    case "Favorite" -> n.favorite = "1".equals(v);
+                    case "Order" -> n.order = v.isEmpty() ? null : Long.parseLong(v);
                     case "WindowPosition" -> {
                         Matcher m = POS.matcher(v);
                         if (m.find()) n.bounds = new Rectangle(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)),
@@ -669,6 +909,9 @@ public class QuickMemo {
             sb.append("CreatedAt=").append(n.createdAt).append('\n');
             sb.append("UpdatedAt=").append(n.updatedAt).append('\n');
             sb.append("DeletedAt=").append(n.deletedAt == null ? "" : n.deletedAt).append('\n');
+            if (n.importedFrom != null) sb.append("ImportedFrom=").append(n.importedFrom).append('\n');
+            if (n.favorite) sb.append("Favorite=1\n");
+            if (n.order != null) sb.append("Order=").append(n.order).append('\n');
             sb.append('\n').append(n.text);
 
             Path target = notesDir.resolve(n.id + ".note");
@@ -747,6 +990,22 @@ public class QuickMemo {
                 case "bullets" -> {
                     for (double cy : new double[]{.28, .5, .72}) { dot(g2, .2, cy, .07); line(g2, .38, cy, .84, cy); }
                 }
+                case "star", "starFilled" -> {
+                    java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
+                    for (int k = 0; k < 10; k++) {
+                        double r = (k % 2 == 0 ? .44 : .19) * s, a = -Math.PI / 2 + k * Math.PI / 5;
+                        double px = s * .5 + Math.cos(a) * r, py = s * .54 + Math.sin(a) * r;
+                        if (k == 0) p.moveTo(px, py); else p.lineTo(px, py);
+                    }
+                    p.closePath();
+                    if (kind.equals("starFilled")) {
+                        g2.setColor(new Color(0xF2B600));
+                        g2.fill(p);
+                        g2.setColor(new Color(0xC99700));
+                        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    }
+                    g2.draw(p);
+                }
                 case "checklist" -> {
                     g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .1, s * .14, s * .28, s * .28, s * .08, s * .08));
                     poly(g2, new double[]{.16, .23, .34}, new double[]{.28, .35, .2});
@@ -801,15 +1060,23 @@ public class QuickMemo {
 
     /** 할 일 항목 앞의 체크박스 (글자색을 따라 그림) */
     static final class CheckIcon implements Icon {
-        static final int BOX = 15, GAP = 7;
+        static final int BOX = 15, GAP = 7, INDENT_PX = 22;
         final boolean done;
+        final int depth;
 
-        CheckIcon(boolean done) { this.done = done; }
+        CheckIcon(boolean done, int depth) {
+            this.done = done;
+            this.depth = depth;
+        }
 
-        public int getIconWidth() { return BOX + GAP; }
+        /** 들여쓰기만큼 아이콘 왼쪽을 비운다 */
+        int boxX() { return depth * INDENT_PX; }
+
+        public int getIconWidth() { return boxX() + BOX + GAP; }
         public int getIconHeight() { return BOX + 2; }
 
         public void paintIcon(Component c, Graphics g, int x, int y) {
+            x += boxX();
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
@@ -891,6 +1158,60 @@ public class QuickMemo {
         return bi;
     }
 
+    /** 스크롤 창 너비를 따라가는 패널 (가로 스크롤 없이 세로로만 스크롤) */
+    static final class TrackWidthPanel extends JPanel implements Scrollable {
+        TrackWidthPanel() { super(new BorderLayout()); }
+
+        public Dimension getPreferredScrollableViewportSize() { return getPreferredSize(); }
+        public int getScrollableUnitIncrement(Rectangle r, int o, int d) { return 16; }
+        public int getScrollableBlockIncrement(Rectangle r, int o, int d) { return Math.max(16, r.height - 32); }
+        public boolean getScrollableTracksViewportWidth() { return true; }
+        public boolean getScrollableTracksViewportHeight() { return false; }
+    }
+
+    /** 줄이 넘치면 다음 줄로 감싸는 FlowLayout (선호 높이를 감싼 줄 수만큼 계산) */
+    static final class WrapLayout extends FlowLayout {
+        WrapLayout(int align, int hgap, int vgap) { super(align, hgap, vgap); }
+
+        @Override
+        public Dimension preferredLayoutSize(Container target) { return size(target, true); }
+
+        @Override
+        public Dimension minimumLayoutSize(Container target) {
+            Dimension d = size(target, false);
+            d.width = 0;
+            return d;
+        }
+
+        Dimension size(Container target, boolean preferred) {
+            synchronized (target.getTreeLock()) {
+                Container parent = target.getParent();
+                int width = parent != null && parent.getWidth() > 0
+                        ? parent.getWidth() - parent.getInsets().left - parent.getInsets().right
+                        : target.getWidth();
+                if (width <= 0) width = Integer.MAX_VALUE;
+                Insets in = target.getInsets();
+                int maxW = width - in.left - in.right - getHgap() * 2;
+                int w = 0, h = 0, rowW = 0, rowH = 0;
+                for (Component c : target.getComponents()) {
+                    if (!c.isVisible()) continue;
+                    Dimension d = preferred ? c.getPreferredSize() : c.getMinimumSize();
+                    if (rowW > 0 && rowW + getHgap() + d.width > maxW) {
+                        w = Math.max(w, rowW);
+                        h += rowH + getVgap();
+                        rowW = 0;
+                        rowH = 0;
+                    }
+                    rowW += (rowW > 0 ? getHgap() : 0) + d.width;
+                    rowH = Math.max(rowH, d.height);
+                }
+                w = Math.max(w, rowW);
+                h += rowH;
+                return new Dimension(w + in.left + in.right + getHgap() * 2, h + in.top + in.bottom + getVgap() * 2);
+            }
+        }
+    }
+
     static String esc(String s) {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;");
     }
@@ -932,17 +1253,137 @@ public class QuickMemo {
             for (Note n : new ArrayList<>(notes)) {
                 if (n.open && !n.deleted()) { openNote(n); opened++; }
             }
+            registerStartMenu();
+            // 처음 실행이고 Windows 스티커 메모가 있으면 한 번 가져오기를 제안
+            if (notes.isEmpty() && StickyImport.available() && !"true".equals(store.settings.getProperty("importOffered"))) {
+                store.set("importOffered", "true");
+                int r = JOptionPane.showConfirmDialog(null, "Windows 스티커 메모가 있습니다. QuickMemo로 가져올까요?\n(나중에 메모 목록 > 설정에서도 가져올 수 있습니다)",
+                        "QuickMemo", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
+                if (r == JOptionPane.YES_OPTION && importStickyNotes(null, false) > 0) { showList(); return; }
+            }
             if (opened == 0) {
                 if (activeNotes().isEmpty()) newNote(null);
                 else showList();
             }
         }
 
+        /** 시작 메뉴 바로가기 이름. 윈도우 검색에서 "memo", "메모" 로 찾을 수 있게 두 단어를 모두 넣음 */
+        static final String START_MENU_NAME = "Quick Memo (메모).lnk";
+
+        /**
+         * exe 로 실행 중이면 시작 메뉴에 바로가기를 만들거나 경로를 고친다 (백그라운드, 실패해도 무시).
+         * 같은 경로로 이미 만들었으면 아무것도 하지 않음.
+         */
+        void registerStartMenu() {
+            Path dir = Updater.installDir();
+            String appData = System.getenv("APPDATA");
+            if (dir == null || appData == null) return;
+            Path exe = dir.resolve("QuickMemo.exe");
+            Path lnk = Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs", START_MENU_NAME);
+            if (exe.toString().equals(store.settings.getProperty("startMenuTarget")) && Files.exists(lnk)) return;
+            store.set("startMenuTarget", exe.toString());
+            Thread t = new Thread(() -> {
+                try {
+                    Files.createDirectories(lnk.getParent());
+                    Path script = Files.createTempFile("QuickMemo-shortcut-", ".ps1");
+                    Files.writeString(script, String.join("\r\n",
+                            "param([string]$Lnk, [string]$Exe, [string]$Dir)",
+                            "$ErrorActionPreference = 'Stop'",
+                            "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($Lnk)",
+                            "$s.TargetPath = $Exe",
+                            "$s.WorkingDirectory = $Dir",
+                            "$s.IconLocation = \"$Exe,0\"",
+                            "$s.Description = 'QuickMemo'",
+                            "$s.Save()",
+                            ""), StandardCharsets.UTF_8);
+                    Process p = new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                            "-File", script.toString(), "-Lnk", lnk.toString(), "-Exe", exe.toString(), "-Dir", dir.toString())
+                            .redirectErrorStream(true).start();
+                    p.getInputStream().readAllBytes();
+                    p.waitFor();
+                    Files.deleteIfExists(script);
+                    Updater.log("start menu shortcut: " + lnk + " -> " + exe + " (exit " + p.exitValue() + ")");
+                } catch (Exception e) {
+                    Updater.log("start menu shortcut failed: " + e);
+                }
+            }, "start-menu");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        /** Windows 스티커 메모를 가져와 닫힌 메모로 추가. 이미 가져온 메모는 건너뜀. 가져온 개수 반환 */
+        int importStickyNotes(Component parent, boolean confirm) {
+            List<Map<String, Object>> rows;
+            try {
+                rows = StickyImport.readNotes();
+            } catch (Exception e) {
+                JOptionPane.showMessageDialog(parent, "스티커 메모를 읽지 못했습니다.\n" + e.getMessage(), "가져오기", JOptionPane.WARNING_MESSAGE);
+                return 0;
+            }
+            Set<String> done = new HashSet<>();
+            for (Note n : notes) if (n.importedFrom != null) done.add(n.importedFrom);
+            List<Map<String, Object>> todo = new ArrayList<>();
+            for (Map<String, Object> r : rows) if (!done.contains((String) r.get("Id"))) todo.add(r);
+            int skipped = rows.size() - todo.size();
+            if (todo.isEmpty()) {
+                JOptionPane.showMessageDialog(parent, rows.isEmpty() ? "가져올 스티커 메모가 없습니다."
+                        : "새로 가져올 메모가 없습니다. (이미 가져온 메모 " + skipped + "개)", "가져오기", JOptionPane.INFORMATION_MESSAGE);
+                return 0;
+            }
+            if (confirm && JOptionPane.showConfirmDialog(parent, "Windows 스티커 메모 " + todo.size() + "개를 가져올까요?"
+                    + (skipped > 0 ? "\n(이미 가져온 " + skipped + "개는 건너뜁니다)" : ""), "가져오기",
+                    JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return 0;
+            for (Map<String, Object> r : todo) {
+                Note n = new Note();
+                n.importedFrom = (String) r.get("Id");
+                n.theme = Theme.parse(String.valueOf(r.get("Theme")));
+                n.text = r.get("Text") instanceof String s ? s.replace("\r\n", "\n") : "";
+                if (r.get("CreatedAt") instanceof Long c) n.createdAt = c;
+                n.updatedAt = r.get("UpdatedAt") instanceof Long u ? u : n.createdAt;
+                notes.add(n);
+                store.save(n);
+            }
+            list.refresh();
+            JOptionPane.showMessageDialog(parent, todo.size() + "개의 메모를 가져왔습니다. 메모 목록에서 열어 보세요.", "가져오기", JOptionPane.INFORMATION_MESSAGE);
+            return todo.size();
+        }
+
+        /**
+         * 목록 순서: 즐겨찾기 먼저. 각 묶음 안에서는 아직 순서를 정하지 않은 메모(새 메모 등)가 최근 수정 순으로 위,
+         * 그다음 사용자가 끌어서 정한 순서.
+         */
+        static final Comparator<Note> LIST_ORDER = (a, b) -> {
+            if (a.favorite != b.favorite) return a.favorite ? -1 : 1;
+            if ((a.order == null) != (b.order == null)) return a.order == null ? -1 : 1;
+            if (a.order == null) return Long.compare(b.updatedAt, a.updatedAt);
+            return Long.compare(a.order, b.order);
+        };
+
         List<Note> activeNotes() {
             List<Note> l = new ArrayList<>();
             for (Note n : notes) if (!n.deleted()) l.add(n);
-            l.sort((a, b) -> Long.compare(b.updatedAt, a.updatedAt));
+            l.sort(LIST_ORDER);
             return l;
+        }
+
+        /** 즐겨찾기 켜기/끄기. 옮겨 간 묶음의 맨 위에 놓인다 */
+        void toggleFavorite(Note n) {
+            n.favorite = !n.favorite;
+            n.order = null;
+            store.save(n);
+            list.refresh();
+        }
+
+        /** 한 묶음(즐겨찾기 또는 일반)의 새 순서를 저장 */
+        void reorder(List<Note> group) {
+            for (int i = 0; i < group.size(); i++) {
+                Note n = group.get(i);
+                if (n.order == null || n.order != i) {
+                    n.order = (long) i;
+                    store.save(n);
+                }
+            }
+            list.refresh();
         }
 
         void newNote(Window near) {
@@ -1001,6 +1442,12 @@ public class QuickMemo {
             checkExit();
         }
 
+        /** 서식 버튼 순서를 저장하고 열린 모든 메모에 적용 */
+        void saveFormatOrder(List<String> ids) {
+            store.set("formatOrder", String.join(",", ids));
+            for (NoteWindow w : windows.values()) w.applyFormatOrder();
+        }
+
         void showList() {
             list.refresh();
             list.setVisible(true);
@@ -1034,7 +1481,10 @@ public class QuickMemo {
         final JPanel header = new JPanel(new BorderLayout());
         final JPanel menu = new JPanel();
         final JPanel swatches = new JPanel(new GridLayout(1, Theme.values().length, 0, 0));
-        final JPanel formatBar = new JPanel(new FlowLayout(FlowLayout.LEFT, 2, 2));
+        final JPanel formatBar = new JPanel(new WrapLayout(FlowLayout.LEFT, 2, 2));
+        /** 서식 버튼 (id → 버튼), 기본 순서 */
+        final Map<String, FlatButton> formatButtons = new LinkedHashMap<>();
+        boolean dragSuppress;
         final JScrollPane scroll;
         final List<FlatButton> flatButtons = new ArrayList<>();
         final List<FlatButton> menuButtons = new ArrayList<>();
@@ -1131,16 +1581,17 @@ public class QuickMemo {
             scroll.setBorder(null);
 
             // ---- 서식 막대
-            bBold = fmt("<html><b>B</b></html>", "굵게 (Ctrl+B)", () -> toggle(StyleConstants.Bold));
-            bItalic = fmt("<html><i>I</i></html>", "기울임꼴 (Ctrl+I)", () -> toggle(StyleConstants.Italic));
-            bUnder = fmt("<html><u>U</u></html>", "밑줄 (Ctrl+U)", () -> toggle(StyleConstants.Underline));
-            bStrike = fmt("<html><s>ab</s></html>", "취소선 (Ctrl+T)", () -> toggle(StyleConstants.StrikeThrough));
-            bBullet = fmt("", "글머리 기호 (Ctrl+Shift+L)", this::toggleBullets);
+            bBold = fmt("bold", "<html><b>B</b></html>", "굵게 (Ctrl+B)", () -> toggle(StyleConstants.Bold));
+            bItalic = fmt("italic", "<html><i>I</i></html>", "기울임꼴 (Ctrl+I)", () -> toggle(StyleConstants.Italic));
+            bUnder = fmt("underline", "<html><u>U</u></html>", "밑줄 (Ctrl+U)", () -> toggle(StyleConstants.Underline));
+            bStrike = fmt("strike", "<html><s>ab</s></html>", "취소선 (Ctrl+T)", () -> toggle(StyleConstants.StrikeThrough));
+            bBullet = fmt("bullets", "", "글머리 기호 (Ctrl+Shift+L, Tab으로 들여쓰기)", this::toggleBullets);
             bBullet.setIcon(new Glyph("bullets", 16));
-            FlatButton bTodo = fmt("", "할 일 목록 (Ctrl+Shift+C)", this::toggleTodoList);
+            FlatButton bTodo = fmt("todo", "", "할 일 목록 (Ctrl+Shift+C)", this::toggleTodoList);
             bTodo.setIcon(new Glyph("checklist", 16));
-            FlatButton bImage = fmt("", "이미지 넣기 (붙여넣기·끌어놓기도 가능)", this::chooseImage);
+            FlatButton bImage = fmt("image", "", "이미지 넣기 (붙여넣기·끌어놓기도 가능)", this::chooseImage);
             bImage.setIcon(new Glyph("image", 16));
+            applyFormatOrder();
 
             JPanel content = new JPanel(new BorderLayout());
             content.setBorder(new EmptyBorder(EDGE - 2, EDGE - 2, EDGE - 2, EDGE - 2));
@@ -1355,12 +1806,72 @@ public class QuickMemo {
             return b;
         }
 
-        FlatButton fmt(String text, String tip, Runnable r) {
-            FlatButton b = flat(text, tip, () -> { r.run(); pane.requestFocusInWindow(); });
+        FlatButton fmt(String id, String text, String tip, Runnable r) {
+            FlatButton b = flat(text, tip + " · 끌어서 순서 변경", () -> {
+                if (dragSuppress) { dragSuppress = false; return; }      // 끌기를 끝낸 놓기는 클릭으로 치지 않음
+                r.run();
+                pane.requestFocusInWindow();
+            });
             b.setPreferredSize(new Dimension(34, 28));
             b.setMargin(new Insets(0, 0, 0, 0));
-            formatBar.add(b);
+            b.putClientProperty("fmtId", id);
+            formatButtons.put(id, b);
+            MouseAdapter dnd = new MouseAdapter() {
+                Point start;
+                boolean dragging;
+
+                public void mousePressed(MouseEvent e) { start = e.getPoint(); dragging = false; }
+
+                public void mouseDragged(MouseEvent e) {
+                    if (!dragging && start != null && start.distance(e.getPoint()) < 6) return;
+                    dragging = true;
+                    dragSuppress = true;
+                    b.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
+                    Point p = SwingUtilities.convertPoint(b, e.getPoint(), formatBar);
+                    int target = -1, cur = -1;
+                    Component[] cs = formatBar.getComponents();
+                    for (int i = 0; i < cs.length; i++) {
+                        if (cs[i] == b) cur = i;
+                        if (cs[i].getBounds().contains(p)) target = i;
+                    }
+                    if (target < 0 && cs.length > 0 && p.y >= cs[cs.length - 1].getY() && p.x > cs[cs.length - 1].getX()) target = cs.length - 1;
+                    if (target >= 0 && target != cur) {
+                        formatBar.remove(b);
+                        formatBar.add(b, target);
+                        formatBar.revalidate();
+                        formatBar.repaint();
+                    }
+                }
+
+                public void mouseReleased(MouseEvent e) {
+                    b.setCursor(Cursor.getDefaultCursor());
+                    if (dragging) app.saveFormatOrder(currentFormatOrder());
+                    dragging = false;
+                    SwingUtilities.invokeLater(() -> dragSuppress = false);
+                }
+            };
+            b.addMouseListener(dnd);
+            b.addMouseMotionListener(dnd);
             return b;
+        }
+
+        List<String> currentFormatOrder() {
+            List<String> ids = new ArrayList<>();
+            for (Component c : formatBar.getComponents())
+                if (c instanceof JComponent jc && jc.getClientProperty("fmtId") instanceof String id) ids.add(id);
+            return ids;
+        }
+
+        /** 저장된 순서(설정 formatOrder)대로 서식 버튼 배치. 저장에 없는 버튼은 기본 순서로 뒤에 붙임 */
+        void applyFormatOrder() {
+            List<String> order = new ArrayList<>();
+            for (String id : app.store.settings.getProperty("formatOrder", "").split(","))
+                if (formatButtons.containsKey(id) && !order.contains(id)) order.add(id);
+            for (String id : formatButtons.keySet()) if (!order.contains(id)) order.add(id);
+            formatBar.removeAll();
+            for (String id : order) formatBar.add(formatButtons.get(id));
+            formatBar.revalidate();
+            formatBar.repaint();
         }
 
         // ---------- 테마
@@ -1455,24 +1966,70 @@ public class QuickMemo {
             updateFormatButtons();
         }
 
+        /** 문단 글 (줄바꿈 제외) */
+        String paraText(Element para) throws BadLocationException {
+            int ps = para.getStartOffset();
+            return doc.getText(ps, Math.min(para.getEndOffset() - 1, doc.getLength()) - ps);
+        }
+
+        int[] selectedParas() {
+            Element root = doc.getDefaultRootElement();
+            int s = pane.getSelectionStart(), e = pane.getSelectionEnd();
+            return new int[]{root.getElementIndex(s), root.getElementIndex(Math.max(s, e - (e > s ? 1 : 0)))};
+        }
+
         void toggleBullets() {
             Element root = doc.getDefaultRootElement();
-            int first = root.getElementIndex(pane.getSelectionStart());
-            int last = root.getElementIndex(Math.max(pane.getSelectionStart(), pane.getSelectionEnd() - (pane.getSelectionEnd() > pane.getSelectionStart() ? 1 : 0)));
+            int[] range = selectedParas();
             try {
                 boolean all = true;
-                for (int p = first; p <= last; p++) {
-                    int st = root.getElement(p).getStartOffset();
-                    if (Markup.todoState(doc, st) != null) continue;
-                    if (!doc.getText(st, Math.min(2, doc.getLength() - st)).equals(Markup.BULLET)) { all = false; break; }
+                for (int p = range[0]; p <= range[1]; p++) {
+                    if (Markup.todoState(doc, root.getElement(p).getStartOffset()) != null) continue;
+                    if (Markup.bulletOf(paraText(root.getElement(p))) == null) { all = false; break; }
                 }
-                for (int p = last; p >= first; p--) {
+                for (int p = range[1]; p >= range[0]; p--) {
                     int st = root.getElement(p).getStartOffset();
                     if (Markup.todoState(doc, st) != null) continue;   // 할 일 항목에는 글머리를 붙이지 않음
-                    boolean has = doc.getText(st, Math.min(2, doc.getLength() - st)).equals(Markup.BULLET);
-                    if (all && has) doc.remove(st, Markup.BULLET.length());
-                    else if (!all && !has) doc.insertString(st, Markup.BULLET, null);
+                    int[] bl = Markup.bulletOf(paraText(root.getElement(p)));
+                    if (all && bl != null) doc.remove(st, bl[1]);
+                    else if (!all && bl == null) doc.insertString(st, Markup.bulletPrefix(0), null);
                 }
+            } catch (BadLocationException ex) {
+                ex.printStackTrace();
+            }
+        }
+
+        /** Tab(+1) / Shift+Tab(-1): 선택한 글머리·할 일 문단의 들여쓰기 단계 변경. 둘 다 아니면 Tab 은 탭 문자 입력 */
+        void indentBullets(int delta) {
+            Element root = doc.getDefaultRootElement();
+            int[] range = selectedParas();
+            boolean any = false;
+            try {
+                for (int p = range[1]; p >= range[0]; p--) {
+                    Element para = root.getElement(p);
+                    int st0 = para.getStartOffset();
+                    Boolean state = Markup.todoState(doc, st0);
+                    if (state != null) {                              // 할 일: 체크박스 아이콘의 단계만 바꿈
+                        any = true;
+                        int d = Markup.todoDepth(doc, st0);
+                        int nd = Math.max(0, Math.min(Markup.MAX_DEPTH, d + delta));
+                        if (nd == d) continue;
+                        int caret = pane.getCaretPosition();
+                        doc.remove(st0, 1);
+                        doc.insertString(st0, " ", Markup.todoAttrs(state, nd));
+                        if (caret > st0 && caret <= doc.getLength()) pane.setCaretPosition(caret);
+                        continue;
+                    }
+                    int[] bl = Markup.bulletOf(paraText(para));
+                    if (bl == null) continue;
+                    any = true;
+                    int nd = Math.max(0, Math.min(Markup.MAX_DEPTH, bl[0] + delta));
+                    if (nd == bl[0]) continue;
+                    int st = para.getStartOffset();
+                    doc.remove(st, bl[1]);
+                    doc.insertString(st, Markup.bulletPrefix(nd), null);
+                }
+                if (!any && delta > 0) pane.replaceSelection("\t");
             } catch (BadLocationException ex) {
                 ex.printStackTrace();
             }
@@ -1497,8 +2054,8 @@ public class QuickMemo {
                         doc.remove(st, 1);
                         if (Boolean.TRUE.equals(state)) clearStrike(st, root.getElement(p).getEndOffset() - 1);
                     } else if (state == null) {
-                        int len = Math.min(Markup.BULLET.length(), doc.getLength() - st);
-                        if (doc.getText(st, len).equals(Markup.BULLET)) doc.remove(st, Markup.BULLET.length());
+                        int[] bl = Markup.bulletOf(paraText(root.getElement(p)));
+                        if (bl != null) doc.remove(st, bl[1]);
                         doc.insertString(st, " ", Markup.todoAttrs(false));
                     }
                 }
@@ -1523,7 +2080,8 @@ public class QuickMemo {
             try {
                 java.awt.geom.Rectangle2D r = pane.modelToView2D(ps);
                 if (r == null) return -1;
-                boolean inX = pt.x >= r.getX() - 2 && pt.x <= r.getX() + CheckIcon.BOX + 3;
+                double bx = r.getX() + Markup.todoDepth(doc, ps) * CheckIcon.INDENT_PX;
+                boolean inX = pt.x >= bx - 2 && pt.x <= bx + CheckIcon.BOX + 3;
                 boolean inY = pt.y >= r.getY() - 2 && pt.y <= r.getY() + Math.max(r.getHeight(), CheckIcon.BOX + 2) + 2;
                 return inX && inY ? ps : -1;
             } catch (BadLocationException ex) {
@@ -1532,8 +2090,8 @@ public class QuickMemo {
         }
 
         /**
-         * 체크박스 토글: 완료하면 취소선을 긋고 그 할 일 목록 묶음의 맨 아래로,
-         * 해제하면 취소선을 지우고 완료 항목들 바로 위로 옮긴다.
+         * 체크박스 토글: 완료하면 취소선을 긋고 같은 단계 형제들의 맨 아래로,
+         * 해제하면 취소선을 지우고 완료된 형제들 바로 위로 옮긴다. 하위 항목(더 깊은 단계)은 함께 이동.
          */
         void toggleDone(int paraStart) {
             Element root = doc.getDefaultRootElement();
@@ -1541,16 +2099,24 @@ public class QuickMemo {
             List<String> lines = new ArrayList<>(Arrays.asList(Markup.serialize(doc).split("\n", -1)));
             if (idx >= lines.size() || Markup.todoOf(lines.get(idx)) == 0) return;
             boolean done = Markup.todoOf(lines.get(idx)) == 1;
-            String moved = Markup.withTodo(lines.remove(idx), done);
+            int d = Markup.todoDepthOf(lines.get(idx));
 
-            int bs = idx, be = idx;                          // 같은 할 일 묶음 [bs, be)
-            while (bs > 0 && Markup.todoOf(lines.get(bs - 1)) > 0) bs--;
-            while (be < lines.size() && Markup.todoOf(lines.get(be)) > 0) be++;
+            int subEnd = idx + 1;                            // 하위 항목까지 [idx, subEnd)
+            while (subEnd < lines.size() && Markup.todoOf(lines.get(subEnd)) > 0 && Markup.todoDepthOf(lines.get(subEnd)) > d) subEnd++;
+            List<String> moved = new ArrayList<>(lines.subList(idx, subEnd));
+            moved.set(0, Markup.withTodo(moved.get(0), done));
+            lines.subList(idx, subEnd).clear();
+
+            // 같은 부모 아래 형제 범위 [bs, be): 단계가 d 이상인 할 일 줄이 이어지는 구간
+            int bs = idx, be = idx;
+            while (bs > 0 && Markup.todoOf(lines.get(bs - 1)) > 0 && Markup.todoDepthOf(lines.get(bs - 1)) >= d) bs--;
+            while (be < lines.size() && Markup.todoOf(lines.get(be)) > 0 && Markup.todoDepthOf(lines.get(be)) >= d) be++;
             int target = be;
             if (!done) {
-                for (int i = bs; i < be; i++) if (Markup.todoOf(lines.get(i)) == 2) { target = i; break; }
+                for (int i = bs; i < be; i++)
+                    if (Markup.todoDepthOf(lines.get(i)) == d && Markup.todoOf(lines.get(i)) == 2) { target = i; break; }
             }
-            lines.add(target, moved);
+            lines.addAll(target, moved);
 
             loading = true;
             Markup.load(doc, String.join("\n", lines), this::mediaIcon);
@@ -1581,17 +2147,27 @@ public class QuickMemo {
                 Element para = doc.getParagraphElement(pos);
                 int ps = para.getStartOffset(), pe = para.getEndOffset() - 1;
                 if (Markup.todoState(doc, ps) != null) {
-                    if (pe - ps <= 1) { doc.remove(ps, 1); return; }
+                    int d = Markup.todoDepth(doc, ps);
+                    if (pe - ps <= 1) {                                // 빈 항목: 한 단계 내어쓰기, 0단계면 목록 끝
+                        doc.remove(ps, 1);
+                        if (d > 0) doc.insertString(ps, " ", Markup.todoAttrs(false, d - 1));
+                        return;
+                    }
                     doc.insertString(pos, "\n", null);
-                    doc.insertString(pos + 1, " ", Markup.todoAttrs(false));
+                    doc.insertString(pos + 1, " ", Markup.todoAttrs(false, d));
                     clearStrike(pos + 2, doc.getParagraphElement(pos + 1).getEndOffset() - 1);
                     pane.setCaretPosition(pos + 2);
                     return;
                 }
                 String text = doc.getText(ps, pe - ps);
-                if (text.startsWith(Markup.BULLET) && pos >= ps + Markup.BULLET.length()) {
-                    if (text.length() == Markup.BULLET.length()) { doc.remove(ps, Markup.BULLET.length()); return; }
-                    doc.insertString(pos, "\n" + Markup.BULLET, null);
+                int[] bl = Markup.bulletOf(text);
+                if (bl != null && pos >= ps + bl[1]) {
+                    if (text.length() == bl[1]) {                       // 빈 항목: 한 단계 내어쓰기, 0단계면 목록 끝
+                        doc.remove(ps, bl[1]);
+                        if (bl[0] > 0) doc.insertString(ps, Markup.bulletPrefix(bl[0] - 1), null);
+                        return;
+                    }
+                    doc.insertString(pos, "\n" + Markup.bulletPrefix(bl[0]), null);
                     return;
                 }
                 doc.insertString(pos, "\n", pane.getInputAttributes());
@@ -1623,6 +2199,10 @@ public class QuickMemo {
             bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_L, m | InputEvent.SHIFT_DOWN_MASK), "bullets", this::toggleBullets);
             bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_C, m | InputEvent.SHIFT_DOWN_MASK), "todoList", this::toggleTodoList);
             bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "smartBreak", this::insertBreak);
+            pane.setFocusTraversalKeys(KeyboardFocusManager.FORWARD_TRAVERSAL_KEYS, Set.of());
+            pane.setFocusTraversalKeys(KeyboardFocusManager.BACKWARD_TRAVERSAL_KEYS, Set.of());
+            bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_TAB, 0), "indent", () -> indentBullets(1));
+            bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_TAB, InputEvent.SHIFT_DOWN_MASK), "outdent", () -> indentBullets(-1));
             bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_N, m), "newNote", () -> app.newNote(this));
             bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_D, m), "deleteNote", () -> app.deleteNote(note, this));
             bind(im, am, KeyStroke.getKeyStroke(KeyEvent.VK_W, m), "closeNote", () -> app.closeNote(note));
@@ -1814,7 +2394,7 @@ public class QuickMemo {
 
             cards.setLayout(new BoxLayout(cards, BoxLayout.Y_AXIS));
             cards.setBorder(new EmptyBorder(0, 16, 16, 16));
-            JPanel holder = new JPanel(new BorderLayout());
+            JPanel holder = new TrackWidthPanel();   // 스크롤바가 생겨도 카드가 보이는 너비에 맞춰짐
             holder.add(cards, BorderLayout.NORTH);
             scroll = new JScrollPane(holder, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
             scroll.setBorder(null);
@@ -1859,20 +2439,33 @@ public class QuickMemo {
             repaint();
         }
 
+        /** 화면에 보이는 카드 순서 (즐겨찾기 / 일반). 끌기 중에는 이 목록을 바꿔 가며 다시 배치 */
+        final List<Card> favCards = new ArrayList<>(), normalCards = new ArrayList<>();
+        boolean searching;
+
         void refresh() {
             if (cards == null) return;
             String q = search.getText().trim().toLowerCase();
-            cards.removeAll();
-            int shown = 0;
+            searching = !q.isEmpty();
+            favCards.clear();
+            normalCards.clear();
             for (Note n : app.activeNotes()) {
                 String plain = Markup.plain(n.text);
-                if (!q.isEmpty() && !plain.toLowerCase().contains(q)) continue;
-                cards.add(new Card(n, plain));
-                cards.add(Box.createVerticalStrut(10));
-                shown++;
+                if (searching && !plain.toLowerCase().contains(q)) continue;
+                (n.favorite ? favCards : normalCards).add(new Card(n, plain));
             }
-            if (shown == 0) {
-                JLabel empty = new JLabel(q.isEmpty() ? "메모가 없습니다. + 를 눌러 새 메모를 만드세요." : "검색 결과가 없습니다.");
+            layoutCards();
+        }
+
+        void layoutCards() {
+            cards.removeAll();
+            boolean headers = !favCards.isEmpty();
+            if (headers) cards.add(groupLabel("즐겨찾기", true));
+            for (Card c : favCards) { cards.add(c); cards.add(Box.createVerticalStrut(10)); }
+            if (headers && !normalCards.isEmpty()) cards.add(groupLabel("메모", false));
+            for (Card c : normalCards) { cards.add(c); cards.add(Box.createVerticalStrut(10)); }
+            if (favCards.isEmpty() && normalCards.isEmpty()) {
+                JLabel empty = new JLabel(searching ? "검색 결과가 없습니다." : "메모가 없습니다. + 를 눌러 새 메모를 만드세요.");
                 empty.setForeground(Color.GRAY);
                 empty.setFont(BASE_FONT);
                 empty.setBorder(new EmptyBorder(20, 4, 0, 0));
@@ -1880,6 +2473,17 @@ public class QuickMemo {
             }
             cards.revalidate();
             cards.repaint();
+        }
+
+        JLabel groupLabel(String text, boolean star) {
+            JLabel l = new JLabel(text);
+            if (star) l.setIcon(new Glyph("starFilled", 14));
+            l.setIconTextGap(6);
+            l.setFont(BASE_FONT.deriveFont(Font.BOLD, 12f));
+            l.setForeground(app.store.darkMode() ? new Color(0xBBBBBB) : new Color(0x666666));
+            l.setBorder(new EmptyBorder(4, 2, 6, 0));
+            l.setAlignmentX(LEFT_ALIGNMENT);
+            return l;
         }
 
         static String when(long ticks) {
@@ -1900,6 +2504,12 @@ public class QuickMemo {
             p.add(dark);
             p.add(new JSeparator());
             p.add(confirm);
+            p.add(new JSeparator());
+            JButton imp = new JButton("Windows 스티커 메모 가져오기...");
+            imp.setEnabled(StickyImport.available());
+            if (!imp.isEnabled()) imp.setToolTipText("이 PC에서 Windows 스티커 메모 데이터를 찾지 못했습니다.");
+            imp.addActionListener(e -> app.importStickyNotes(SwingUtilities.getWindowAncestor(imp), true));
+            p.add(imp);
             p.add(new JLabel("<html><small>저장 위치: " + esc(app.store.dir.toString()) + "</small></html>"));
             p.add(new JLabel("<html><small>버전 " + VERSION + (Updater.installDir() != null ? " · 실행할 때 자동 업데이트" : "") + "</small></html>"));
             int r = JOptionPane.showConfirmDialog(this, p, "설정", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
@@ -1930,9 +2540,19 @@ public class QuickMemo {
                 more.hoverColor = t.hover();
                 more.setPreferredSize(new Dimension(30, 24));
                 more.addActionListener(e -> popup().show(more, 0, more.getHeight()));
+                FlatButton star = new FlatButton("", note.favorite ? "즐겨찾기 해제" : "즐겨찾기 (목록 위쪽에 고정)");
+                star.setIcon(new Glyph(note.favorite ? "starFilled" : "star", 16));
+                star.setForeground(t.fg());
+                star.hoverColor = t.hover();
+                star.setPreferredSize(new Dimension(30, 24));
+                star.addActionListener(e -> app.toggleFavorite(note));
+                JPanel tools = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+                tools.setOpaque(false);
+                tools.add(star);
+                tools.add(more);
                 JPanel head = new JPanel(new BorderLayout());
                 head.setOpaque(false);
-                head.add(more, BorderLayout.WEST);
+                head.add(tools, BorderLayout.WEST);
                 head.add(time, BorderLayout.EAST);
 
                 String[] lines = plain.strip().split("\n");
@@ -1965,23 +2585,60 @@ public class QuickMemo {
                     add(pic, BorderLayout.SOUTH);
                 }
                 setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
-                addMouseListener(new MouseAdapter() {
+                MouseAdapter ma = new MouseAdapter() {
+                    Point start;
+
                     public void mouseClicked(MouseEvent e) {
-                        if (SwingUtilities.isLeftMouseButton(e)) app.openNote(note);
+                        if (SwingUtilities.isLeftMouseButton(e) && !dragging) app.openNote(note);
                     }
-                    public void mousePressed(MouseEvent e) { maybePopup(e); }
-                    public void mouseReleased(MouseEvent e) { maybePopup(e); }
+
+                    public void mousePressed(MouseEvent e) { start = e.getPoint(); maybePopup(e); }
+
+                    /** 같은 묶음(즐겨찾기/일반) 안에서만 끌어서 순서 변경. 검색 중에는 끌기 안 됨 */
+                    public void mouseDragged(MouseEvent e) {
+                        if (searching || !SwingUtilities.isLeftMouseButton(e) || start == null) return;
+                        if (!dragging && start.distance(e.getPoint()) < 6) return;
+                        if (!dragging) { dragging = true; setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)); repaint(); }
+                        List<Card> group = note.favorite ? favCards : normalCards;
+                        Point p = SwingUtilities.convertPoint(Card.this, e.getPoint(), cards);
+                        for (Card c : group) {
+                            if (c != Card.this && c.getBounds().contains(p)) {
+                                int to = group.indexOf(c);
+                                group.remove(Card.this);
+                                group.add(to, Card.this);
+                                layoutCards();
+                                break;
+                            }
+                        }
+                    }
+
+                    public void mouseReleased(MouseEvent e) {
+                        maybePopup(e);
+                        if (!dragging) return;
+                        setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                        List<Note> order = new ArrayList<>();
+                        for (Card c : note.favorite ? favCards : normalCards) order.add(c.note);
+                        SwingUtilities.invokeLater(() -> { dragging = false; app.reorder(order); });
+                    }
+
                     void maybePopup(MouseEvent e) { if (e.isPopupTrigger()) popup().show(Card.this, e.getX(), e.getY()); }
-                });
+                };
+                addMouseListener(ma);
+                addMouseMotionListener(ma);
             }
+
+            boolean dragging;
 
             JPopupMenu popup() {
                 JPopupMenu m = new JPopupMenu();
                 JMenuItem open = new JMenuItem(note.open ? "메모 닫기" : "메모 열기");
                 open.addActionListener(e -> { if (note.open) app.closeNote(note); else app.openNote(note); });
+                JMenuItem fav = new JMenuItem(note.favorite ? "즐겨찾기 해제" : "즐겨찾기");
+                fav.addActionListener(e -> app.toggleFavorite(note));
                 JMenuItem del = new JMenuItem("메모 삭제");
                 del.addActionListener(e -> app.deleteNote(note, NotesListWindow.this));
                 m.add(open);
+                m.add(fav);
                 m.add(del);
                 return m;
             }
@@ -2001,6 +2658,12 @@ public class QuickMemo {
                 g2.fillRect(0, 0, getWidth(), getHeight());
                 g2.setColor(note.theme.header);
                 g2.fillRect(0, 0, getWidth(), 4);
+                if (dragging) {                                          // 끌고 있는 카드 표시
+                    g2.setClip(null);
+                    g2.setColor(new Color(0x2B6CD9));
+                    g2.setStroke(new BasicStroke(2f));
+                    g2.draw(new java.awt.geom.RoundRectangle2D.Float(1, 1, getWidth() - 2, getHeight() - 2, 8, 8));
+                }
                 g2.dispose();
                 super.paintComponent(g);
             }
