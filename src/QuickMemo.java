@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.6";
+    static final String VERSION = "1.0.7";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -3114,7 +3114,7 @@ public class QuickMemo {
                 super(NotesListWindow.this, "설정", true);
                 setDefaultCloseOperation(DISPOSE_ON_CLOSE);
                 build();
-                setSize(420, 600);
+                setSize(420, 700);
                 setLocationRelativeTo(NotesListWindow.this);
                 NoteWindow.bind(getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), getRootPane().getActionMap(),
                         KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close", this::dispose);
@@ -3163,21 +3163,27 @@ public class QuickMemo {
                 page.add(section("정보", row("버전 " + VERSION, Updater.installDir() != null ? "실행할 때 새 버전을 자동으로 받습니다" : "개발용 실행 (자동 업데이트 꺼짐)", null),
                         row("메모 저장 위치", app.store.dir.toString().replace(System.getProperty("user.home"), "~"), open)));
 
-                page.add(Box.createVerticalGlue());
-                JButton close = new JButton("닫기");
-                close.addActionListener(e -> dispose());
-                close.putClientProperty("JButton.buttonType", "roundRect");
-                JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
-                bottom.setOpaque(false);
-                bottom.setAlignmentX(LEFT_ALIGNMENT);
-                bottom.add(close);
-                page.add(bottom);
-                getRootPane().setDefaultButton(close);
-
                 JScrollPane sp = new JScrollPane(page, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
                 sp.setBorder(null);
+                sp.getViewport().setBackground(pageBg());
                 sp.getVerticalScrollBar().setUnitIncrement(16);
-                setContentPane(sp);
+
+                // 스크롤과 상관없이 항상 보이는 아래쪽 닫기 바
+                JButton close = new JButton("닫기");
+                close.addActionListener(e -> dispose());
+                close.setPreferredSize(new Dimension(96, 32));
+                JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+                bottom.setBackground(dark() ? new Color(0x1A1A1A) : new Color(0xEBEBEB));
+                bottom.setBorder(BorderFactory.createCompoundBorder(
+                        BorderFactory.createMatteBorder(1, 0, 0, 0, dark() ? new Color(255, 255, 255, 20) : new Color(0, 0, 0, 20)),
+                        new EmptyBorder(12, 18, 12, 18)));
+                bottom.add(close);
+                getRootPane().setDefaultButton(close);
+
+                JPanel root = new JPanel(new BorderLayout());
+                root.add(sp, BorderLayout.CENTER);
+                root.add(bottom, BorderLayout.SOUTH);
+                setContentPane(root);
             }
 
             void rebuild() {
