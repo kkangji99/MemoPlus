@@ -32,17 +32,53 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.4";
+    static final String VERSION = "1.0.5";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
     public static void main(String[] args) throws Exception {
         System.setProperty("awt.useSystemAAFontSettings", "on");
-        SwingUtilities.invokeAndWait(() -> {
-            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) {}
-        });
+        boolean dark = false;
+        try (var r = Files.newBufferedReader(Store.dataDir().resolve("settings.properties"), StandardCharsets.UTF_8)) {
+            Properties p = new Properties();
+            p.load(r);
+            dark = Boolean.parseBoolean(p.getProperty("darkMode", "false"));
+        } catch (IOException ignored) { }
+        boolean d = dark;
+        SwingUtilities.invokeAndWait(() -> setupLaf(d));
         if (Updater.updateIfAvailable()) return;      // 새 버전을 받아 재시작하는 경우
         SwingUtilities.invokeLater(() -> new App().start());
+    }
+
+    /**
+     * 화면 테마: FlatLaf (Windows 11 느낌의 현대적인 Swing 테마). 설정 창·확인 창·버튼·스크롤바·창 제목 표시줄에 적용.
+     * FlatLaf 를 못 쓰면 Windows 기본 테마로.
+     */
+    static void setupLaf(boolean dark) {
+        UIManager.put("defaultFont", new javax.swing.plaf.FontUIResource("Malgun Gothic", Font.PLAIN, 13));
+        UIManager.put("Button.arc", 10);
+        UIManager.put("Component.arc", 10);
+        UIManager.put("TextComponent.arc", 10);
+        UIManager.put("CheckBox.arc", 6);
+        UIManager.put("Component.focusWidth", 1);
+        UIManager.put("ScrollBar.showButtons", false);
+        UIManager.put("ScrollBar.width", 10);
+        UIManager.put("ScrollBar.thumbArc", 999);
+        UIManager.put("ScrollBar.thumbInsets", new Insets(2, 2, 2, 2));
+        UIManager.put("TitlePane.unifiedBackground", true);
+        UIManager.put("PopupMenu.borderCornerRadius", 8);
+        UIManager.put("MenuItem.selectionArc", 6);
+        try {
+            if (dark) com.formdev.flatlaf.FlatDarkLaf.setup(); else com.formdev.flatlaf.FlatLightLaf.setup();
+        } catch (Throwable e) {
+            try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) { }
+        }
+    }
+
+    /** 실행 중에 밝게/어둡게를 바꾸면 모든 창의 테마를 다시 적용 */
+    static void switchLaf(boolean dark) {
+        setupLaf(dark);
+        try { com.formdev.flatlaf.FlatLaf.updateUI(); } catch (Throwable e) { for (Window w : Window.getWindows()) SwingUtilities.updateComponentTreeUI(w); }
     }
 
     // ===================================================================== 자동 업데이트
@@ -1768,6 +1804,14 @@ public class QuickMemo {
             checkExit();
         }
 
+        /** 밝게/어둡게: 설정 저장 + 창 테마(FlatLaf) 전환 + 열린 창 다시 칠하기 */
+        void setDark(boolean dark) {
+            store.set("darkMode", String.valueOf(dark));
+            switchLaf(dark);
+            for (NoteWindow w : windows.values()) w.applyTheme();
+            list.applyMode();
+        }
+
         /** 디자인 스타일을 바꾸고 열린 모든 창에 바로 적용 */
         void setStyle(Style s) {
             applyStyle(s);
@@ -2196,6 +2240,7 @@ public class QuickMemo {
                 b.setForeground(t.fg());
                 b.hoverColor = t.hover();
             }
+            scroll.getVerticalScrollBar().setUI(new CuteScrollBarUI());       // 테마 전환(updateUI) 뒤에도 메모 색 스크롤바 유지
             scroll.getVerticalScrollBar().putClientProperty("accent", t.header.darker());
             setIconImage(makeIcon());
             repaint();
@@ -2993,6 +3038,7 @@ public class QuickMemo {
                 b.setBackground(bg);
                 b.hoverColor = app.store.darkMode() ? new Color(255, 255, 255, 40) : cute() ? new Color(255, 160, 190, 60) : new Color(0, 0, 0, 28);
             }
+            scroll.getVerticalScrollBar().setUI(new CuteScrollBarUI());
             scroll.getVerticalScrollBar().putClientProperty("accent", cute() ? PINK : new Color(0xB0B0B0));
             search.setBackground(app.store.darkMode() ? (cute() ? new Color(0x37323F) : new Color(0x2D2D2D)) : Color.WHITE);
             search.setForeground(fg);
@@ -3055,45 +3101,320 @@ public class QuickMemo {
         }
 
         void showSettings() {
-            JRadioButton light = new JRadioButton("밝게", !app.store.darkMode());
-            JRadioButton dark = new JRadioButton("어둡게", app.store.darkMode());
-            ButtonGroup g = new ButtonGroup();
-            g.add(light);
-            g.add(dark);
-            JCheckBox confirm = new JCheckBox("삭제 전에 확인", app.store.confirmDelete());
-            JRadioButton simple = new JRadioButton("심플 (기본)", !cute());
-            JRadioButton cuteBtn = new JRadioButton("아기자기 (파스텔·둥근 모양·마스킹테이프)", cute());
-            ButtonGroup sg = new ButtonGroup();
-            sg.add(simple);
-            sg.add(cuteBtn);
-            JPanel p = new JPanel(new GridLayout(0, 1, 0, 4));
-            p.add(new JLabel("디자인"));
-            p.add(simple);
-            p.add(cuteBtn);
-            p.add(new JSeparator());
-            p.add(new JLabel("색 모드"));
-            p.add(light);
-            p.add(dark);
-            p.add(new JSeparator());
-            p.add(confirm);
-            p.add(new JSeparator());
-            JButton imp = new JButton("Windows 스티커 메모 가져오기...");
-            imp.setEnabled(StickyImport.available());
-            if (!imp.isEnabled()) imp.setToolTipText("이 PC에서 Windows 스티커 메모 데이터를 찾지 못했습니다.");
-            imp.addActionListener(e -> app.importStickyNotes(SwingUtilities.getWindowAncestor(imp), true));
-            p.add(imp);
-            p.add(new JLabel("<html><small>저장 위치: " + esc(app.store.dir.toString()) + "</small></html>"));
-            p.add(new JLabel("<html><small>버전 " + VERSION + (Updater.installDir() != null ? " · 실행할 때 자동 업데이트" : "") + "</small></html>"));
-            int r = JOptionPane.showConfirmDialog(this, p, "설정", JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-            if (r == JOptionPane.OK_OPTION) {
-                app.store.set("darkMode", String.valueOf(dark.isSelected()));
-                app.store.set("confirmDelete", String.valueOf(confirm.isSelected()));
-                Style s = cuteBtn.isSelected() ? Style.Cute : Style.Simple;
-                if (s != STYLE) {
-                    app.store.set("uiStyle", s.name());
-                    app.setStyle(s);
+            new SettingsDialog().setVisible(true);
+        }
+
+        /** 설정 창: 섹션 카드 + 미리보기 선택 + 토글. 바꾸면 바로 적용·저장 (확인 버튼 없음) */
+        final class SettingsDialog extends JDialog {
+            SettingsDialog() {
+                super(NotesListWindow.this, "설정", true);
+                setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+                build();
+                setSize(420, 600);
+                setLocationRelativeTo(NotesListWindow.this);
+                NoteWindow.bind(getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), getRootPane().getActionMap(),
+                        KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close", this::dispose);
+            }
+
+            boolean dark() { return app.store.darkMode(); }
+            Color accent() { return cute() ? PINK : dark() ? new Color(0x4CC2FF) : new Color(0x0067C0); }
+            Color pageBg() { return dark() ? new Color(0x202020) : new Color(0xF3F3F3); }
+            Color cardBg() { return dark() ? new Color(0x2B2B2B) : Color.WHITE; }
+            Color text() { return dark() ? new Color(0xF0F0F0) : new Color(0x1B1B1B); }
+            Color sub() { return dark() ? new Color(0xA8A8A8) : new Color(0x6B6B6B); }
+
+            /** 색·스타일이 바뀌면 내용을 다시 만든다 */
+            void build() {
+                JPanel page = new TrackWidthPanel();               // 창 너비에 맞춰 배치
+                page.setLayout(new BoxLayout(page, BoxLayout.Y_AXIS));
+                page.setBackground(pageBg());
+                page.setBorder(new EmptyBorder(16, 18, 16, 18));
+
+                // 디자인
+                JPanel styles = new JPanel(new GridLayout(1, 2, 10, 0));
+                styles.setOpaque(false);
+                styles.add(new StyleCard(Style.Simple, "심플", "깔끔한 기본 디자인"));
+                styles.add(new StyleCard(Style.Cute, "아기자기", "파스텔 · 마스킹테이프"));
+                page.add(section("디자인", styles));
+
+                // 화면
+                page.add(section("화면 모드", row("밝기", "메모 목록과 창의 밝기", new Segmented(new String[]{"밝게", "어둡게"}, dark() ? 1 : 0, i -> {
+                    if ((i == 1) != dark()) { app.setDark(i == 1); rebuild(); }
+                }))));
+
+                // 동작
+                page.add(section("동작", row("삭제 전에 확인", "메모를 지울 때 한 번 더 묻기", new ToggleSwitch(app.store.confirmDelete(), on ->
+                        app.store.set("confirmDelete", String.valueOf(on))))));
+
+                // 가져오기
+                JButton imp = new JButton("가져오기");
+                imp.setEnabled(StickyImport.available());
+                imp.addActionListener(e -> app.importStickyNotes(this, true));
+                page.add(section("가져오기", row("Windows 스티커 메모", StickyImport.available()
+                        ? "이 PC의 스티커 메모를 QuickMemo로 복사" : "이 PC에서 스티커 메모를 찾지 못했습니다", imp)));
+
+                // 정보
+                JButton open = new JButton("폴더 열기");
+                open.addActionListener(e -> { try { Desktop.getDesktop().open(app.store.dir.toFile()); } catch (Exception ignored) { } });
+                page.add(section("정보", row("버전 " + VERSION, Updater.installDir() != null ? "실행할 때 새 버전을 자동으로 받습니다" : "개발용 실행 (자동 업데이트 꺼짐)", null),
+                        row("메모 저장 위치", app.store.dir.toString().replace(System.getProperty("user.home"), "~"), open)));
+
+                page.add(Box.createVerticalGlue());
+                JButton close = new JButton("닫기");
+                close.addActionListener(e -> dispose());
+                close.putClientProperty("JButton.buttonType", "roundRect");
+                JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
+                bottom.setOpaque(false);
+                bottom.setAlignmentX(LEFT_ALIGNMENT);
+                bottom.add(close);
+                page.add(bottom);
+                getRootPane().setDefaultButton(close);
+
+                JScrollPane sp = new JScrollPane(page, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+                sp.setBorder(null);
+                sp.getVerticalScrollBar().setUnitIncrement(16);
+                setContentPane(sp);
+            }
+
+            void rebuild() {
+                build();
+                revalidate();
+                repaint();
+            }
+
+            /** 제목 + 둥근 카드 */
+            JComponent section(String title, JComponent... rows) {
+                JPanel wrap = new JPanel();
+                wrap.setLayout(new BoxLayout(wrap, BoxLayout.Y_AXIS));
+                wrap.setOpaque(false);
+                wrap.setAlignmentX(LEFT_ALIGNMENT);
+                JLabel t = new JLabel(title);
+                t.setFont(BASE_FONT.deriveFont(Font.BOLD, 13f));
+                t.setForeground(text());
+                t.setBorder(new EmptyBorder(6, 2, 6, 0));
+                t.setAlignmentX(LEFT_ALIGNMENT);
+                wrap.add(t);
+                JPanel card = new JPanel() {
+                    @Override
+                    protected void paintComponent(Graphics g) {
+                        Graphics2D g2 = (Graphics2D) g.create();
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                        int arc = cute() ? 18 : 10;
+                        g2.setColor(cardBg());
+                        g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, arc, arc);
+                        g2.setColor(dark() ? new Color(255, 255, 255, 18) : new Color(0, 0, 0, 22));
+                        g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, arc, arc);
+                        g2.dispose();
+                    }
+                };
+                card.setOpaque(false);
+                card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+                card.setBorder(new EmptyBorder(12, 14, 12, 14));
+                card.setAlignmentX(LEFT_ALIGNMENT);
+                for (int i = 0; i < rows.length; i++) {
+                    if (i > 0) {
+                        JSeparator s = new JSeparator();
+                        s.setForeground(dark() ? new Color(255, 255, 255, 20) : new Color(0, 0, 0, 18));
+                        s.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
+                        card.add(Box.createVerticalStrut(10));
+                        card.add(s);
+                        card.add(Box.createVerticalStrut(10));
+                    }
+                    rows[i].setAlignmentX(LEFT_ALIGNMENT);
+                    card.add(rows[i]);
                 }
-                applyMode();
+                wrap.add(card);
+                wrap.add(Box.createVerticalStrut(10));
+                wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, wrap.getPreferredSize().height));
+                return wrap;
+            }
+
+            /** 왼쪽 제목·설명 + 오른쪽 조작 */
+            JComponent row(String title, String desc, JComponent right) {
+                JPanel r = new JPanel(new BorderLayout(12, 0));
+                r.setOpaque(false);
+                JPanel labels = new JPanel();
+                labels.setLayout(new BoxLayout(labels, BoxLayout.Y_AXIS));
+                labels.setOpaque(false);
+                JLabel t = new JLabel(title);
+                t.setForeground(text());
+                JLabel d = new JLabel("<html><div style='width:190px'>" + esc(desc) + "</div></html>");
+                d.setFont(BASE_FONT.deriveFont(11.5f));
+                d.setForeground(sub());
+                labels.add(t);
+                labels.add(Box.createVerticalStrut(2));
+                labels.add(d);
+                r.add(labels, BorderLayout.CENTER);
+                if (right != null) {
+                    JPanel holder = new JPanel(new GridBagLayout());
+                    holder.setOpaque(false);
+                    holder.add(right);
+                    r.add(holder, BorderLayout.EAST);
+                }
+                return r;
+            }
+
+            /** 디자인 선택 카드: 작은 메모 미리보기 + 이름 */
+            final class StyleCard extends JComponent {
+                final Style style;
+                final String name, desc;
+
+                StyleCard(Style style, String name, String desc) {
+                    this.style = style;
+                    this.name = name;
+                    this.desc = desc;
+                    setPreferredSize(new Dimension(170, 128));
+                    setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    addMouseListener(new MouseAdapter() {
+                        public void mouseClicked(MouseEvent e) {
+                            if (STYLE == style) return;
+                            app.store.set("uiStyle", style.name());
+                            app.setStyle(style);
+                            rebuild();
+                        }
+                    });
+                }
+
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                    boolean sel = STYLE == style;
+                    int w = getWidth(), h = getHeight();
+                    g2.setColor(dark() ? new Color(0x333333) : new Color(0xF7F7F7));
+                    g2.fillRoundRect(0, 0, w - 1, h - 1, 12, 12);
+                    g2.setColor(sel ? accent() : dark() ? new Color(255, 255, 255, 30) : new Color(0, 0, 0, 30));
+                    g2.setStroke(new BasicStroke(sel ? 2f : 1f));
+                    g2.drawRoundRect(1, 1, w - 3, h - 3, 12, 12);
+                    // 미리보기 메모
+                    int pw = 74, ph = 56, px = (w - pw) / 2, py = 12;
+                    if (style == Style.Simple) {
+                        g2.setColor(new Color(0xFFF7D1));
+                        g2.fillRoundRect(px, py, pw, ph, 6, 6);
+                        g2.setClip(new java.awt.geom.RoundRectangle2D.Float(px, py, pw, ph, 6, 6));
+                        g2.setColor(new Color(0xFFF2AB));
+                        g2.fillRect(px, py, pw, 12);
+                        g2.setClip(null);
+                        g2.setColor(new Color(0, 0, 0, 40));
+                        g2.drawRoundRect(px, py, pw, ph, 6, 6);
+                        g2.setColor(new Color(0x9A9A9A));
+                        g2.fillRoundRect(px + 9, py + 22, 46, 4, 4, 4);
+                        g2.fillRoundRect(px + 9, py + 32, 34, 4, 4, 4);
+                    } else {
+                        g2.setColor(new Color(0xFFE7EF));
+                        g2.fillRoundRect(px, py, pw, ph, 16, 16);
+                        g2.setClip(new java.awt.geom.RoundRectangle2D.Float(px, py, pw, ph, 16, 16));
+                        g2.setColor(new Color(0xFFC7DA));
+                        g2.fillRect(px, py, pw, 13);
+                        g2.setClip(null);
+                        g2.setColor(new Color(255, 160, 190, 220));
+                        g2.fill(java.awt.geom.AffineTransform.getRotateInstance(-0.12, px + pw / 2.0, py)
+                                .createTransformedShape(new java.awt.geom.Rectangle2D.Double(px + pw / 2.0 - 16, py - 5, 32, 10)));
+                        g2.setColor(PINK);
+                        g2.fill(NoteShape.Heart.outline(px + pw - 24, py + ph - 22, 14, 13));
+                        g2.setColor(new Color(0xC9A99A));
+                        g2.fillRoundRect(px + 9, py + 22, 40, 4, 4, 4);
+                        g2.fillRoundRect(px + 9, py + 32, 30, 4, 4, 4);
+                    }
+                    // 이름·설명
+                    g2.setFont(BASE_FONT.deriveFont(Font.BOLD, 13f));
+                    g2.setColor(text());
+                    FontMetrics fm = g2.getFontMetrics();
+                    g2.drawString(name, (w - fm.stringWidth(name)) / 2, py + ph + 22);
+                    g2.setFont(BASE_FONT.deriveFont(11f));
+                    g2.setColor(sub());
+                    fm = g2.getFontMetrics();
+                    g2.drawString(desc, (w - fm.stringWidth(desc)) / 2, py + ph + 39);
+                    if (sel) {                                           // 선택 표시
+                        g2.setColor(accent());
+                        g2.fillOval(w - 24, 8, 16, 16);
+                        g2.setColor(Color.WHITE);
+                        g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                        g2.drawPolyline(new int[]{w - 20, w - 17, w - 12}, new int[]{16, 19, 13}, 3);
+                    }
+                    g2.dispose();
+                }
+            }
+
+            /** 둘 중 하나를 고르는 알약 모양 스위치 */
+            final class Segmented extends JComponent {
+                final String[] items;
+                int selected;
+
+                Segmented(String[] items, int selected, java.util.function.IntConsumer onChange) {
+                    this.items = items;
+                    this.selected = selected;
+                    setPreferredSize(new Dimension(140, 32));
+                    setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    addMouseListener(new MouseAdapter() {
+                        public void mouseClicked(MouseEvent e) {
+                            int i = Math.min(items.length - 1, e.getX() * items.length / Math.max(1, getWidth()));
+                            if (i == Segmented.this.selected) return;
+                            Segmented.this.selected = i;
+                            repaint();
+                            onChange.accept(i);
+                        }
+                    });
+                }
+
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                    int w = getWidth(), h = getHeight(), seg = w / items.length;
+                    g2.setColor(dark() ? new Color(0x3A3A3A) : new Color(0xEDEDED));
+                    g2.fillRoundRect(0, 0, w, h, h, h);
+                    g2.setColor(cardBg());
+                    g2.fillRoundRect(selected * seg + 3, 3, seg - 6, h - 6, h - 6, h - 6);
+                    g2.setColor(new Color(0, 0, 0, dark() ? 60 : 25));
+                    g2.drawRoundRect(selected * seg + 3, 3, seg - 7, h - 7, h - 6, h - 6);
+                    g2.setFont(BASE_FONT.deriveFont(12.5f));
+                    FontMetrics fm = g2.getFontMetrics();
+                    for (int i = 0; i < items.length; i++) {
+                        g2.setColor(i == selected ? text() : sub());
+                        g2.drawString(items[i], i * seg + (seg - fm.stringWidth(items[i])) / 2, (h + fm.getAscent() - fm.getDescent()) / 2);
+                    }
+                    g2.dispose();
+                }
+            }
+
+            /** 켜고 끄는 토글 스위치 */
+            final class ToggleSwitch extends JComponent {
+                boolean on;
+
+                ToggleSwitch(boolean on, java.util.function.Consumer<Boolean> onChange) {
+                    this.on = on;
+                    setPreferredSize(new Dimension(44, 24));
+                    setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                    addMouseListener(new MouseAdapter() {
+                        public void mouseClicked(MouseEvent e) {
+                            ToggleSwitch.this.on = !ToggleSwitch.this.on;
+                            repaint();
+                            onChange.accept(ToggleSwitch.this.on);
+                        }
+                    });
+                }
+
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    int w = getWidth(), h = getHeight();
+                    if (on) {
+                        g2.setColor(accent());
+                        g2.fillRoundRect(0, 0, w, h, h, h);
+                        g2.setColor(Color.WHITE);
+                        g2.fillOval(w - h + 4, 4, h - 8, h - 8);
+                    } else {
+                        g2.setColor(sub());
+                        g2.setStroke(new BasicStroke(1.4f));
+                        g2.drawRoundRect(1, 1, w - 3, h - 3, h - 2, h - 2);
+                        g2.fillOval(6, 6, h - 12, h - 12);
+                    }
+                    g2.dispose();
+                }
             }
         }
 
