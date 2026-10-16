@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.5";
+    static final String VERSION = "1.0.6";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -1294,26 +1294,15 @@ public class QuickMemo {
                     g2.setColor(new Color(255, 255, 255, 170));
                     g2.fill(new java.awt.geom.Ellipse2D.Double(s * .33, s * .17, s * .14, s * .12));
                 }
-                case "gear" -> {                                     // 심플: 톱니 / 아기자기: 꽃잎 모양 톱니
-                    if (!cute()) {
-                        for (int k = 0; k < 8; k++) {
-                            double a = Math.PI / 4 * k;
-                            line(g2, .5 + Math.cos(a) * .28, .5 + Math.sin(a) * .28, .5 + Math.cos(a) * .42, .5 + Math.sin(a) * .42);
-                        }
-                        g2.draw(new java.awt.geom.Ellipse2D.Double(s * .27, s * .27, s * .46, s * .46));
-                        g2.draw(new java.awt.geom.Ellipse2D.Double(s * .42, s * .42, s * .16, s * .16));
-                        break;
+                case "gear" -> {                                     // 흔히 쓰는 설정 톱니바퀴 (톱니 8개 + 가운데 구멍)
+                    java.awt.geom.Area gear = new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(s * .2, s * .2, s * .6, s * .6));
+                    for (int k = 0; k < 8; k++) {
+                        Shape tooth = new java.awt.geom.RoundRectangle2D.Double(s * .41, s * .07, s * .18, s * .2, s * .06, s * .06);
+                        gear.add(new java.awt.geom.Area(java.awt.geom.AffineTransform.getRotateInstance(Math.PI / 4 * k, s * .5, s * .5)
+                                .createTransformedShape(tooth)));
                     }
-                    for (int k = 0; k < 6; k++) {
-                        double a = Math.PI / 3 * k;
-                        double px = .5 + Math.cos(a) * .27, py = .5 + Math.sin(a) * .27;
-                        g2.draw(new java.awt.geom.Ellipse2D.Double(s * (px - .15), s * (py - .15), s * .3, s * .3));
-                    }
-                    g2.setColor(c != null && c.getBackground() != null ? c.getBackground() : Color.WHITE);
-                    g2.fill(new java.awt.geom.Ellipse2D.Double(s * .3, s * .3, s * .4, s * .4));
-                    g2.setColor(fg);
-                    g2.draw(new java.awt.geom.Ellipse2D.Double(s * .3, s * .3, s * .4, s * .4));
-                    dot(g2, .5, .5, .07);
+                    g2.draw(gear);
+                    g2.draw(new java.awt.geom.Ellipse2D.Double(s * .37, s * .37, s * .26, s * .26));
                 }
                 case "image" -> {                                    // 노란 해와 언덕
                     g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .1, s * .16, s * .8, s * .68, s * .24, s * .24));
@@ -1465,31 +1454,46 @@ public class QuickMemo {
         return bi;
     }
 
-    /** 앱 아이콘: 동글한 메모지 + 분홍 마스킹테이프 + 하트 (창 아이콘·ico 공용) */
+    /** 앱 아이콘: 오른쪽 아래 모서리가 접힌 메모지 + 글줄 (창 아이콘·ico 공용) */
     static java.awt.image.BufferedImage appIcon(int size, Theme theme) {
         java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = img.createGraphics();
         g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
-        double s = size, m = s * .1, w = s - 2 * m;
-        Shape note = new java.awt.geom.RoundRectangle2D.Double(m, m + s * .04, w, w * .92, s * .26, s * .26);
-        g.setColor(theme.header);
+        double s = size, x0 = s * .12, y0 = s * .1, x1 = s * .88, y1 = s * .9, f = s * .26, r = s * .1;
+        java.awt.geom.Path2D.Double note = new java.awt.geom.Path2D.Double();
+        note.moveTo(x0 + r, y0);
+        note.lineTo(x1 - r, y0);
+        note.quadTo(x1, y0, x1, y0 + r);
+        note.lineTo(x1, y1 - f);
+        note.lineTo(x1 - f, y1);
+        note.lineTo(x0 + r, y1);
+        note.quadTo(x0, y1, x0, y1 - r);
+        note.lineTo(x0, y0 + r);
+        note.quadTo(x0, y0, x0 + r, y0);
+        note.closePath();
+        float[] hsb = Color.RGBtoHSB(theme.header.getRed(), theme.header.getGreen(), theme.header.getBlue(), null);
+        Color paper = Color.getHSBColor(hsb[0], Math.min(1f, hsb[1] * 1.7f), hsb[2]);   // 작은 크기에서도 보이게 조금 진하게
+        g.setColor(paper);
         g.fill(note);
-        g.setColor(theme.header.darker());
-        g.setStroke(new BasicStroke((float) Math.max(1, s / 40)));
+        // 접힌 모서리
+        java.awt.geom.Path2D.Double fold = new java.awt.geom.Path2D.Double();
+        fold.moveTo(x1, y1 - f);
+        fold.lineTo(x1 - f + s * .04, y1 - f);
+        fold.quadTo(x1 - f, y1 - f, x1 - f, y1 - f + s * .04);
+        fold.lineTo(x1 - f, y1);
+        fold.closePath();
+        g.setColor(paper.darker());
+        g.fill(fold);
+        g.setStroke(new BasicStroke((float) Math.max(1, s / 36)));
         g.draw(note);
-        // 마스킹테이프
-        Shape tape = java.awt.geom.AffineTransform.getRotateInstance(-0.2, s * .5, s * .13)
-                .createTransformedShape(new java.awt.geom.RoundRectangle2D.Double(s * .32, s * .05, s * .36, s * .16, s * .05, s * .05));
-        g.setColor(new Color(255, 160, 190, 220));
-        g.fill(tape);
-        // 하트
-        g.setColor(PINK);
-        g.fill(NoteShape.Heart.outline(s * .3, s * .38, s * .4, s * .38));
-        if (size >= 32) {                                      // 반짝이
-            g.setColor(new Color(255, 255, 255, 200));
-            g.fill(new java.awt.geom.Ellipse2D.Double(s * .37, s * .45, s * .08, s * .07));
-        }
+        // 글줄
+        g.setColor(new Color(0, 0, 0, 110));
+        g.setStroke(new BasicStroke((float) Math.max(1.2, s / 14), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+        double lx = s * .27;
+        g.draw(new java.awt.geom.Line2D.Double(lx, s * .32, s * .73, s * .32));
+        g.draw(new java.awt.geom.Line2D.Double(lx, s * .5, s * .73, s * .5));
+        g.draw(new java.awt.geom.Line2D.Double(lx, s * .68, s * .5, s * .68));
         g.dispose();
         return img;
     }
