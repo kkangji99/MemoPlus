@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.13";
+    static final String VERSION = "1.0.14";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -144,7 +144,16 @@ public class QuickMemo {
             return false;
         }
 
-        record Release(String version, String zipUrl) {}
+        /** sha256 은 GitHub 이 자산마다 알려 주는 digest (없으면 null: 예전 릴리스) */
+        record Release(String version, String zipUrl, String sha256) {}
+
+        /** 이 저장소의 릴리스 다운로드 주소만 받는다 (API 응답이 조작돼도 다른 곳의 파일을 설치하지 않게) */
+        static boolean trustedDownload(String url) {
+            return url.startsWith("https://github.com/" + UPDATE_REPO + "/releases/download/") && !url.contains("..");
+        }
+
+        static final long MAX_DOWNLOAD = 300L << 20, MAX_UNZIPPED = 800L << 20;
+        static final int MAX_ENTRIES = 20000;
 
         /** QuickMemo.exe 로 실행 중이면 그 설치 폴더, java/javaw 로 jar 를 실행 중이면 null */
         static Path installDir() {
@@ -198,8 +207,15 @@ public class QuickMemo {
             var res = client().send(request(API + "/repos/" + UPDATE_REPO + "/releases/latest")
                     .timeout(java.time.Duration.ofSeconds(5)).build(), java.net.http.HttpResponse.BodyHandlers.ofString());
             if (res.statusCode() != 200) return null;
-            Matcher tag = TAG.matcher(res.body()), zip = ZIP.matcher(res.body());
-            return tag.find() && zip.find() ? new Release(tag.group(1), zip.group(1)) : null;
+            String body = res.body();
+            Matcher tag = TAG.matcher(body), zip = ZIP.matcher(body);
+            if (!tag.find() || !zip.find()) return null;
+            if (!trustedDownload(zip.group(1))) { log("untrusted download url, skip: " + zip.group(1)); return null; }
+            // 같은 자산 객체 안의 digest (자산 이름부터 다운로드 주소 사이)
+            int nameAt = body.lastIndexOf("\"name\"", zip.start());
+            Matcher dg = Pattern.compile("\"digest\"\\s*:\\s*\"sha256:([0-9a-fA-F]{64})\"")
+                    .matcher(body.substring(Math.max(0, nameAt), zip.start()));
+            return new Release(tag.group(1), zip.group(1), dg.find() ? dg.group(1).toLowerCase() : null);
         }
 
         static int compare(String a, String b) {
@@ -238,7 +254,12 @@ public class QuickMemo {
                 if (!Files.isWritable(dir.getParent())) throw new IOException("설치 폴더 위치에 쓸 수 없습니다: " + dir.getParent());
                 deleteTree(staging);
                 Path zip = Files.createTempFile("QuickMemo-", ".zip");
-                download(r.zipUrl(), zip, pw);
+                String sha = download(r.zipUrl(), zip, pw);
+                if (r.sha256() != null && !r.sha256().equals(sha)) {
+                    Files.deleteIfExists(zip);
+                    throw new IOException("받은 파일이 손상되었거나 바뀌었습니다 (SHA-256 불일치)");
+                }
+                log("download sha256 " + sha + (r.sha256() != null ? " (verified)" : " (no digest published)"));
                 unzip(zip, staging);
                 Files.deleteIfExists(zip);
                 Path newApp = Files.exists(staging.resolve("QuickMemo.exe")) ? staging : null;
@@ -279,36 +300,55 @@ public class QuickMemo {
             }
         }
 
-        static void download(String url, Path to, Progress pw) throws Exception {
+        /** 받아서 저장하고 SHA-256 (소문자 16진수) 을 돌려준다. 너무 크면 중단 */
+        static String download(String url, Path to, Progress pw) throws Exception {
             var res = client().send(request(url).header("Accept", "application/octet-stream").build(),
                     java.net.http.HttpResponse.BodyHandlers.ofInputStream());
             if (res.statusCode() != 200) throw new IOException("다운로드 실패 (HTTP " + res.statusCode() + ")");
             long total = res.headers().firstValueAsLong("Content-Length").orElse(-1);
+            if (total > MAX_DOWNLOAD) throw new IOException("업데이트 파일이 너무 큽니다");
+            java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
             try (var in = res.body(); var out = Files.newOutputStream(to)) {
                 byte[] buf = new byte[64 * 1024];
                 long done = 0;
                 int n;
                 while ((n = in.read(buf)) > 0) {
                     out.write(buf, 0, n);
+                    md.update(buf, 0, n);
                     done += n;
+                    if (done > MAX_DOWNLOAD) throw new IOException("업데이트 파일이 너무 큽니다");
                     if (total > 0) pw.set((int) (done * 100 / total));
                 }
             }
+            return java.util.HexFormat.of().formatHex(md.digest());
         }
 
         static void unzip(Path zip, Path dest) throws IOException {
             Files.createDirectories(dest);
             Path root = dest.toAbsolutePath().normalize();
+            long written = 0;
+            int entries = 0;
             try (var zin = new java.util.zip.ZipInputStream(Files.newInputStream(zip))) {
                 java.util.zip.ZipEntry e;
+                byte[] buf = new byte[64 * 1024];
                 while ((e = zin.getNextEntry()) != null) {
+                    if (++entries > MAX_ENTRIES) throw new IOException("압축 항목이 너무 많습니다");
                     String name = e.getName().replace('\\', '/');      // PowerShell 5 Compress-Archive 는 역슬래시를 씀
-                    Path p = root.resolve(name).normalize();
+                    if (name.contains(":")) throw new IOException("잘못된 압축 항목: " + e.getName());   // 드라이브·대체 데이터 스트림
+                    Path p;
+                    try { p = root.resolve(name).normalize(); } catch (InvalidPathException ex) { throw new IOException("잘못된 압축 항목: " + e.getName()); }
                     if (!p.startsWith(root)) throw new IOException("잘못된 압축 항목: " + e.getName());
                     if (name.endsWith("/")) Files.createDirectories(p);
                     else {
                         Files.createDirectories(p.getParent());
-                        Files.copy(zin, p, StandardCopyOption.REPLACE_EXISTING);
+                        try (var out = Files.newOutputStream(p)) {          // 압축 폭탄 방지: 풀린 크기 합계 제한
+                            int n;
+                            while ((n = zin.read(buf)) > 0) {
+                                written += n;
+                                if (written > MAX_UNZIPPED) throw new IOException("압축을 푼 크기가 너무 큽니다");
+                                out.write(buf, 0, n);
+                            }
+                        }
                     }
                 }
             }
@@ -837,7 +877,7 @@ public class QuickMemo {
                     boolean known = true;
                     if (cur.length() > 0) { runs.add(new Run(cur.toString(), b, it, u, s, null)); cur.setLength(0); }
                     if (tok.startsWith("id=")) { /* 문단 ID: 무시 */ }
-                    else if (tok.startsWith("img=") && tok.length() > 4) runs.add(new Run("", false, false, false, false, tok.substring(4)));
+                    else if (tok.startsWith("img=") && Store.validMediaId(tok.substring(4))) runs.add(new Run("", false, false, false, false, tok.substring(4)));
                     else switch (tok) {
                         case "b" -> b = true;
                         case "b0" -> b = false;
@@ -1175,15 +1215,41 @@ public class QuickMemo {
             return id;
         }
 
+        /**
+         * 미디어 ID 는 우리가 만든 UUID 형식만. 메모 글에 "..\" 나 "\\서버\공유" 같은 경로가 들어 있어도
+         * media 폴더 밖 파일이나 네트워크 경로를 열지 않게 (네트워크 경로를 열면 Windows 가 로그인 정보를 보낼 수 있음)
+         */
+        static boolean validMediaId(String id) {
+            return id != null && id.matches("[0-9a-fA-F][0-9a-fA-F\\-]{7,63}");
+        }
+
         java.awt.image.BufferedImage loadImage(String id) {
+            if (!validMediaId(id)) return null;
             return imageCache.computeIfAbsent(id, k -> {
-                try {
-                    Path p = mediaDir.resolve(k + ".png");
-                    return Files.exists(p) ? javax.imageio.ImageIO.read(p.toFile()) : null;
-                } catch (IOException e) {
-                    return null;
-                }
+                Path p = mediaDir.resolve(k + ".png").normalize();
+                return p.startsWith(mediaDir) && Files.exists(p) ? readImageSafely(p.toFile()) : null;
             });
+        }
+
+        static final long MAX_PIXELS = 40_000_000L;                  // 약 6300×6300
+
+        /** 그림 크기를 먼저 확인하고 너무 크면 읽지 않는다 (작은 파일이 엄청난 크기로 풀리는 그림 방지) */
+        static java.awt.image.BufferedImage readImageSafely(java.io.File f) {
+            try (var in = javax.imageio.ImageIO.createImageInputStream(f)) {
+                if (in == null) return null;
+                var readers = javax.imageio.ImageIO.getImageReaders(in);
+                if (!readers.hasNext()) return null;
+                javax.imageio.ImageReader r = readers.next();
+                try {
+                    r.setInput(in, true, true);
+                    if ((long) r.getWidth(0) * r.getHeight(0) > MAX_PIXELS) return null;
+                    return r.read(0);
+                } finally {
+                    r.dispose();
+                }
+            } catch (Exception | OutOfMemoryError e) {
+                return null;
+            }
         }
         final Properties settings = new Properties();
 
@@ -1635,6 +1701,7 @@ public class QuickMemo {
     static java.awt.image.BufferedImage toBuffered(Image img) {
         if (img instanceof java.awt.image.BufferedImage bi) return bi;
         ImageIcon loaded = new ImageIcon(img);      // 크기 정보가 준비될 때까지 대기
+        if ((long) loaded.getIconWidth() * loaded.getIconHeight() > Store.MAX_PIXELS) return null;   // 너무 큰 그림
         java.awt.image.BufferedImage bi = new java.awt.image.BufferedImage(
                 Math.max(1, loaded.getIconWidth()), Math.max(1, loaded.getIconHeight()), java.awt.image.BufferedImage.TYPE_INT_ARGB);
         Graphics2D g = bi.createGraphics();
@@ -1913,6 +1980,76 @@ public class QuickMemo {
             Color a = c.getClientProperty("accent") instanceof Color col ? col : new Color(0xD8C8B8);
             g2.setColor(new Color(a.getRed(), a.getGreen(), a.getBlue(), isThumbRollover() ? 220 : 150));
             g2.fillRoundRect(r.x + 2, r.y + 2, r.width - 4, r.height - 4, r.width - 4, r.width - 4);
+            g2.dispose();
+        }
+    }
+
+    /**
+     * 메모 목록 카드의 미리보기 글. HTML JLabel 대신 직접 줄바꿈해 그린다
+     * (HTML 은 색만 바꿔도 다시 파싱하고 배치마다 다시 재서 메모가 많으면 느림).
+     */
+    static final class PreviewText extends JComponent {
+        static final int WRAP = 250;
+        final List<String> src;
+        final boolean empty;
+        List<String> wrapped;
+        Font wrappedFor;
+
+        PreviewText(List<String> src, boolean empty) {
+            this.src = src;
+            this.empty = empty;
+            setOpaque(false);
+        }
+
+        /** 글꼴이 바뀔 때만 다시 줄바꿈 (공백에서 우선 끊고, 없으면 글자 단위) */
+        List<String> lines() {
+            Font f = getFont();
+            if (wrapped != null && f.equals(wrappedFor)) return wrapped;
+            FontMetrics fm = getFontMetrics(f);
+            List<String> out = new ArrayList<>();
+            if (empty) out.add("빈 메모");
+            for (String s : src) {
+                if (s.isEmpty()) { out.add(""); continue; }
+                int start = 0;
+                while (start < s.length()) {
+                    int end = start, lastSpace = -1, w = 0;
+                    while (end < s.length()) {
+                        int cw = fm.charWidth(s.charAt(end));
+                        if (w + cw > WRAP && end > start) break;
+                        if (s.charAt(end) == ' ') lastSpace = end;
+                        w += cw;
+                        end++;
+                    }
+                    if (end < s.length() && lastSpace > start) end = lastSpace + 1;
+                    out.add(s.substring(start, end).stripTrailing());
+                    start = end;
+                }
+            }
+            wrapped = out;
+            wrappedFor = f;
+            return out;
+        }
+
+        @Override
+        public Dimension getPreferredSize() {
+            FontMetrics fm = getFontMetrics(getFont());
+            return new Dimension(WRAP, Math.max(1, lines().size()) * fm.getHeight());
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
+            Font f = getFont();
+            g2.setFont(empty ? f.deriveFont(Font.ITALIC) : f);
+            g2.setColor(getForeground());
+            FontMetrics fm = g2.getFontMetrics();
+            int y = fm.getAscent();
+            for (String l : lines()) {
+                g2.drawString(l, 0, y);
+                y += fm.getHeight();
+            }
             g2.dispose();
         }
     }
@@ -2212,9 +2349,25 @@ public class QuickMemo {
             checkExit();
         }
 
+        /** 여러 메모를 한 번에 삭제 (확인은 부른 쪽에서). 목록은 마지막에 한 번만 다시 그림 */
+        void deleteNotes(List<Note> del) {
+            long now = nowTicks();
+            for (Note n : del) {
+                NoteWindow w = windows.remove(n.id);
+                if (w != null) { w.flush(); w.dispose(); }
+                n.open = false;
+                n.deletedAt = now;
+                store.save(n);
+            }
+            list.refresh();
+            checkExit();
+        }
+
         /** 밝게/어둡게: 설정 저장 + 창 테마(FlatLaf) 전환 + 열린 창 다시 칠하기 */
         void setDark(boolean dark) {
             store.set("darkMode", String.valueOf(dark));
+            // 목록 카드(직접 그리는 컴포넌트 수백 개)는 테마 갱신에서 빼고, 끝난 뒤 색만 바꿔 다시 붙인다
+            if (list != null && list.cards != null) list.cards.removeAll();
             switchLaf(dark);
             for (NoteWindow w : windows.values()) w.applyTheme();
             list.applyMode();
@@ -2475,14 +2628,10 @@ public class QuickMemo {
         }
 
         boolean insertImageFile(java.io.File f) {
-            try {
-                java.awt.image.BufferedImage img = javax.imageio.ImageIO.read(f);
-                if (img == null) return false;
-                insertImage(img);
-                return true;
-            } catch (IOException e) {
-                return false;
-            }
+            java.awt.image.BufferedImage img = Store.readImageSafely(f);     // 너무 큰 그림은 넣지 않음
+            if (img == null) return false;
+            insertImage(img);
+            return true;
         }
 
         void chooseImage() {
@@ -2559,7 +2708,9 @@ public class QuickMemo {
                         return true;
                     }
                     if (t.isDataFlavorSupported(DataFlavor.imageFlavor)) {
-                        insertImage(toBuffered((Image) t.getTransferData(DataFlavor.imageFlavor)));
+                        java.awt.image.BufferedImage img = toBuffered((Image) t.getTransferData(DataFlavor.imageFlavor));
+                        if (img == null) return false;
+                        insertImage(img);
                         return true;
                     }
                 } catch (Exception ex) {
@@ -3531,11 +3682,16 @@ public class QuickMemo {
             gear.setIcon(new Glyph("gear", 20));
             gear.setPreferredSize(new Dimension(40, 36));
             gear.addActionListener(e -> showSettings());
+            selectBtn.setIcon(new Glyph("checklist", 20));
+            selectBtn.setPreferredSize(new Dimension(40, 36));
+            selectBtn.addActionListener(e -> setSelecting(!selecting));
             buttons.add(add);
+            buttons.add(selectBtn);
             buttons.add(gear);
             JPanel tb = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
             tb.setOpaque(false);
             tb.add(add);
+            tb.add(selectBtn);
             tb.add(gear);
             top.add(title, BorderLayout.WEST);
             top.add(tb, BorderLayout.EAST);
@@ -3559,10 +3715,44 @@ public class QuickMemo {
             sp.setBorder(new EmptyBorder(0, 16, 10, 16));
             sp.add(search);
 
+            // 여러 개 선택 막대: [전체 선택]  N개 선택됨   [삭제] [취소]
+            selectAll.setOpaque(false);
+            selectAll.setFont(BASE_FONT.deriveFont(13f));
+            selectAll.addActionListener(e -> {
+                selected.clear();
+                if (selectAll.isSelected()) for (Card c : visibleCards()) selected.add(c.note.id);
+                selectionChanged();
+            });
+            selCount.setFont(BASE_FONT.deriveFont(12.5f));
+            selCount.setBorder(new EmptyBorder(0, 10, 0, 0));
+            JButton del = deleteSelected;
+            del.putClientProperty("JButton.buttonType", "roundRect");
+            del.setBackground(new Color(0xD64545));                  // 지우는 버튼은 빨갛게
+            del.setForeground(Color.WHITE);
+            del.putClientProperty("FlatLaf.style", "borderColor: #D64545; hoverBackground: #C23838; pressedBackground: #A92F2F");
+            del.addActionListener(e -> deleteSelection());
+            JButton cancel = new JButton("취소");
+            cancel.putClientProperty("JButton.buttonType", "roundRect");
+            cancel.addActionListener(e -> setSelecting(false));
+            JPanel selBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+            selBtns.setOpaque(false);
+            selBtns.add(del);
+            selBtns.add(cancel);
+            selectBar.setOpaque(false);
+            selectBar.setBorder(new EmptyBorder(0, 16, 10, 16));
+            selectBar.add(selectAll, BorderLayout.WEST);
+            selectBar.add(selCount, BorderLayout.CENTER);
+            selectBar.add(selBtns, BorderLayout.EAST);
+            selectBar.setVisible(false);
+
+            JPanel lower = new JPanel(new BorderLayout());
+            lower.setOpaque(false);
+            lower.add(sp, BorderLayout.NORTH);
+            lower.add(selectBar, BorderLayout.SOUTH);
             JPanel north = new JPanel(new BorderLayout());
             north.setOpaque(false);
             north.add(top, BorderLayout.NORTH);
-            north.add(sp, BorderLayout.SOUTH);
+            north.add(lower, BorderLayout.SOUTH);
 
             cards.setLayout(new BoxLayout(cards, BoxLayout.Y_AXIS));
             cards.setBorder(new EmptyBorder(0, 16, 16, 16));
@@ -3585,6 +3775,8 @@ public class QuickMemo {
                     KeyStroke.getKeyStroke(KeyEvent.VK_N, InputEvent.CTRL_DOWN_MASK), "newNote", () -> app.newNote(this));
             NoteWindow.bind(rp.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), rp.getActionMap(),
                     KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), "search", search::requestFocusInWindow);
+            NoteWindow.bind(rp.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), rp.getActionMap(),
+                    KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "endSelect", () -> { if (selecting) setSelecting(false); });
 
             addWindowListener(new WindowAdapter() {
                 public void windowClosing(WindowEvent e) {
@@ -3600,12 +3792,62 @@ public class QuickMemo {
             return d ? STYLE.listDark : STYLE.listLight;
         }
 
+        // ---------- 여러 개 선택해 삭제
+        final FlatButton selectBtn = new FlatButton("", "여러 개 선택해 삭제");
+        final JPanel selectBar = new JPanel(new BorderLayout());
+        final JCheckBox selectAll = new JCheckBox("전체 선택");
+        final JLabel selCount = new JLabel();
+        final JButton deleteSelected = new JButton("삭제");
+        boolean selecting;
+        final Set<String> selected = new HashSet<>();
+
+        List<Card> visibleCards() {
+            List<Card> l = new ArrayList<>(favCards);
+            l.addAll(normalCards);
+            return l;
+        }
+
+        void setSelecting(boolean on) {
+            selecting = on;
+            selected.clear();
+            selectAll.setSelected(false);
+            selectBar.setVisible(on);
+            selectBtn.active = on;
+            selectBtn.repaint();
+            for (Card c : cardCache.values()) c.selectModeChanged();
+            selectionChanged();
+            getContentPane().revalidate();
+        }
+
+        /** 선택 수·전체 선택 체크·삭제 버튼 상태를 맞춘다 */
+        void selectionChanged() {
+            List<Card> vis = visibleCards();
+            selected.retainAll(cardCache.keySet());
+            long n = vis.stream().filter(c -> selected.contains(c.note.id)).count();
+            selCount.setText(n + "개 선택됨");
+            selectAll.setSelected(n > 0 && n == vis.size());
+            deleteSelected.setEnabled(n > 0);
+            for (Card c : vis) c.repaint();
+        }
+
+        void deleteSelection() {
+            List<Note> del = new ArrayList<>();
+            for (Card c : visibleCards()) if (selected.contains(c.note.id)) del.add(c.note);
+            if (del.isEmpty()) return;
+            int r = JOptionPane.showConfirmDialog(this, "선택한 메모 " + del.size() + "개를 삭제할까요?", "메모 삭제",
+                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
+            if (r != JOptionPane.OK_OPTION) return;
+            app.deleteNotes(del);
+            setSelecting(false);
+        }
+
         Color fg() {
             boolean d = app.store.darkMode();
             return cute() ? (d ? new Color(0xFFF4F8) : new Color(0x5A4636)) : (d ? new Color(0xF0F0F0) : new Color(0x1F1F1F));
         }
 
         void applyMode() {
+            styleGen++;
             Color bg = bg(), fg = fg();
             getContentPane().setBackground(bg);
             for (Component c : List.of(scroll.getViewport(), (Component) scroll.getViewport().getView(), cards)) c.setBackground(bg);
@@ -3621,6 +3863,8 @@ public class QuickMemo {
             search.setBackground(app.store.darkMode() ? (cute() ? new Color(0x37323F) : new Color(0x2D2D2D)) : Color.WHITE);
             search.setForeground(fg);
             search.setCaretColor(fg);
+            selectAll.setForeground(fg);
+            selCount.setForeground(fg);
             refresh();
             repaint();
         }
@@ -3629,18 +3873,35 @@ public class QuickMemo {
         final List<Card> favCards = new ArrayList<>(), normalCards = new ArrayList<>();
         boolean searching;
 
+        /** 디자인·밝기가 바뀔 때마다 1씩 늘어남. 카드는 이 값이 다르면 색만 다시 칠한다 */
+        static int styleGen;
+        /** 메모별 카드 재사용 (HTML 글·그림 썸네일을 매번 새로 만들지 않게) */
+        final Map<String, Card> cardCache = new HashMap<>();
+
         void refresh() {
             if (cards == null) return;
             String q = search.getText().trim().toLowerCase();
             searching = !q.isEmpty();
             favCards.clear();
             normalCards.clear();
+            Set<String> alive = new HashSet<>();
             for (Note n : app.activeNotes()) {
-                String plain = Markup.plain(n.text);
-                if (searching && !plain.toLowerCase().contains(q)) continue;
-                (n.favorite ? favCards : normalCards).add(new Card(n, plain));
+                alive.add(n.id);
+                String stamp = n.updatedAt + "/" + n.favorite + "/" + n.shape + "/" + n.theme + "/" + n.open + "/" + when(n.updatedAt);
+                Card c = cardCache.get(n.id);
+                if (c == null || !stamp.equals(c.stamp)) {
+                    c = new Card(n, Markup.plain(n.text));
+                    c.stamp = stamp;
+                    cardCache.put(n.id, c);
+                } else {
+                    c.restyle();
+                }
+                if (searching && !c.plain.toLowerCase().contains(q)) continue;
+                (n.favorite ? favCards : normalCards).add(c);
             }
+            cardCache.keySet().retainAll(alive);                      // 지운 메모의 카드는 버림
             layoutCards();
+            if (selecting) selectionChanged();
         }
 
         void layoutCards() {
@@ -3678,14 +3939,19 @@ public class QuickMemo {
             return t.toLocalDate().equals(LocalDate.now()) ? t.format(TIME) : t.format(DATE);
         }
 
+        SettingsDialog settings;
+
+        /** 설정 창은 하나만. 열려 있어도 메모를 누르고 쓸 수 있게 모달이 아님 */
         void showSettings() {
-            new SettingsDialog().setVisible(true);
+            if (settings == null || !settings.isDisplayable()) settings = new SettingsDialog();
+            settings.setVisible(true);
+            settings.toFront();
         }
 
         /** 설정 창: 섹션 카드 + 미리보기 선택 + 토글. 바꾸면 바로 적용·저장 (확인 버튼 없음) */
         final class SettingsDialog extends JDialog {
             SettingsDialog() {
-                super(NotesListWindow.this, "설정", true);
+                super(NotesListWindow.this, "설정", false);
                 setDefaultCloseOperation(DISPOSE_ON_CLOSE);
                 build();
                 setSize(480, 700);
@@ -4048,10 +4314,10 @@ public class QuickMemo {
                 setBorder(new EmptyBorder(14, 14, 16, 12));
                 setAlignmentX(LEFT_ALIGNMENT);
 
+                this.plain = plain;
                 Theme t = note.theme;
-                JLabel time = new JLabel(when(note.updatedAt));
+                time = new JLabel(when(note.updatedAt));
                 time.setFont(BASE_FONT.deriveFont(11f));
-                time.setForeground(new Color(t.fg().getRed(), t.fg().getGreen(), t.fg().getBlue(), 150));
                 if (note.shape != NoteShape.Square) {                    // 사각이 아닌 스티커는 모양 표시
                     time.setIcon(new Icon() {
                         public int getIconWidth() { return 14; }
@@ -4069,69 +4335,63 @@ public class QuickMemo {
                     });
                     time.setIconTextGap(5);
                 }
-                FlatButton more = new FlatButton("", "메뉴");
+                more = new FlatButton("", "메뉴");
                 more.setIcon(new Glyph("more", 16));
-                more.setForeground(t.fg());
-                more.hoverColor = t.hover();
                 more.setPreferredSize(new Dimension(30, 24));
                 more.addActionListener(e -> popup().show(more, 0, more.getHeight()));
-                FlatButton star = new FlatButton("", note.favorite ? "즐겨찾기 해제" : "즐겨찾기 (목록 위쪽에 고정)");
+                star = new FlatButton("", note.favorite ? "즐겨찾기 해제" : "즐겨찾기 (목록 위쪽에 고정)");
                 star.setIcon(new Glyph(note.favorite ? "starFilled" : "star", 16));
-                star.setForeground(t.fg());
-                star.hoverColor = t.hover();
                 star.setPreferredSize(new Dimension(30, 24));
                 star.addActionListener(e -> app.toggleFavorite(note));
-                JPanel tools = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
+                tools = new JPanel(new FlowLayout(FlowLayout.LEFT, 0, 0));
                 tools.setOpaque(false);
                 tools.add(star);
                 tools.add(more);
+                tools.setPreferredSize(tools.getPreferredSize());          // 선택 모드에서 버튼을 숨겨도 같은 크기
                 JPanel head = new JPanel(new BorderLayout());
                 head.setOpaque(false);
                 head.add(tools, BorderLayout.WEST);
                 head.add(time, BorderLayout.EAST);
 
                 String[] lines = plain.strip().split("\n");
-                StringBuilder html = new StringBuilder("<html><div style='width:250px'>");
+                List<String> src = new ArrayList<>();
                 List<String> media = Markup.mediaIds(note.text);
-                if (plain.isBlank() && media.isEmpty()) html.append("<i>빈 메모</i>");
-                for (int i = 0; i < Math.min(lines.length, 6); i++) {
-                    String l = lines[i].length() > 120 ? lines[i].substring(0, 120) + "…" : lines[i];
-                    html.append(i > 0 ? "<br>" : "").append(esc(l));
-                }
-                if (lines.length > 6) html.append("<br>…");
-                html.append("</div></html>");
-                JLabel body = new JLabel(html.toString());
+                for (int i = 0; i < Math.min(lines.length, 6); i++)
+                    src.add(lines[i].length() > 120 ? lines[i].substring(0, 120) + "…" : lines[i]);
+                if (lines.length > 6) src.add("…");
+                body = new PreviewText(src, plain.isBlank() && media.isEmpty());
                 body.setFont(BASE_FONT.deriveFont(13f));
-                body.setForeground(t.fg());
-                body.setVerticalAlignment(SwingConstants.TOP);
 
                 add(head, BorderLayout.NORTH);
                 add(body, BorderLayout.CENTER);
                 java.awt.image.BufferedImage thumb = media.isEmpty() ? null : app.store.loadImage(media.get(0));
                 if (thumb != null) {
-                    JLabel pic = new JLabel(new ScaledImageIcon(thumb, 250, 140));
+                    pic = new JLabel(new ScaledImageIcon(thumb, 250, 140));
                     pic.setHorizontalAlignment(SwingConstants.LEFT);
                     pic.setBorder(new EmptyBorder(6, 0, 0, 0));
                     if (media.size() > 1) {
                         pic.setText("+" + (media.size() - 1));
-                        pic.setForeground(t.fg());
                         pic.setVerticalTextPosition(SwingConstants.BOTTOM);
                     }
                     add(pic, BorderLayout.SOUTH);
                 }
+                restyle();
+                selectModeChanged();
                 setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                 MouseAdapter ma = new MouseAdapter() {
                     Point start;
 
                     public void mouseClicked(MouseEvent e) {
-                        if (SwingUtilities.isLeftMouseButton(e) && !dragging) app.openNote(note);
+                        if (!SwingUtilities.isLeftMouseButton(e) || dragging) return;
+                        if (selecting) { toggleSelected(); return; }       // 선택 모드: 누르면 선택/해제
+                        app.openNote(note);
                     }
 
                     public void mousePressed(MouseEvent e) { start = e.getPoint(); maybePopup(e); }
 
                     /** 같은 묶음(즐겨찾기/일반) 안에서만 끌어서 순서 변경. 검색 중에는 끌기 안 됨 */
                     public void mouseDragged(MouseEvent e) {
-                        if (searching || !SwingUtilities.isLeftMouseButton(e) || start == null) return;
+                        if (searching || selecting || !SwingUtilities.isLeftMouseButton(e) || start == null) return;
                         if (!dragging && start.distance(e.getPoint()) < 6) return;
                         if (!dragging) { dragging = true; setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)); repaint(); }
                         List<Card> group = note.favorite ? favCards : normalCards;
@@ -4163,6 +4423,77 @@ public class QuickMemo {
             }
 
             boolean dragging;
+            final String plain;
+            final JLabel time;
+            final PreviewText body;
+            final FlatButton more, star;
+            final JPanel tools;
+            JLabel pic;
+
+            boolean isSelected() { return selecting && selected.contains(note.id); }
+
+            void toggleSelected() {
+                if (!selected.remove(note.id)) selected.add(note.id);
+                selectionChanged();
+            }
+
+            /** 선택 모드에서는 별·메뉴 버튼 대신 체크 상자를 그린다 */
+            void selectModeChanged() {
+                star.setVisible(!selecting);                         // 자리는 그대로 두어 카드 높이가 바뀌지 않게
+                more.setVisible(!selecting);
+                setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                revalidate();
+                repaint();
+            }
+
+            @Override
+            protected void paintChildren(Graphics g) {
+                super.paintChildren(g);
+                if (!selecting) return;
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                Insets in = getInsets();
+                int s = 18, x = in.left + 2, y = in.top + 3;
+                boolean on = isSelected();
+                Color ac = cute() ? styleAccent() : new Color(0x0067C0);
+                if (on) {
+                    g2.setColor(ac);
+                    g2.fillRoundRect(x, y, s, s, 6, 6);
+                    g2.setColor(Color.WHITE);
+                    g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g2.drawPolyline(new int[]{x + 4, x + 8, x + 14}, new int[]{y + 9, y + 13, y + 5}, 3);
+                    // 선택된 카드 테두리 강조
+                    g2.setStroke(new BasicStroke(2f));
+                    g2.setColor(ac);
+                    g2.drawRoundRect(3, 3, getWidth() - 7, getHeight() - 9, cute() ? 20 : 8, cute() ? 20 : 8);
+                } else {
+                    g2.setColor(new Color(255, 255, 255, 200));
+                    g2.fillRoundRect(x, y, s, s, 6, 6);
+                    g2.setColor(new Color(note.theme.fg().getRed(), note.theme.fg().getGreen(), note.theme.fg().getBlue(), 140));
+                    g2.setStroke(new BasicStroke(1.5f));
+                    g2.drawRoundRect(x, y, s, s, 6, 6);
+                }
+                g2.dispose();
+            }
+            /** 이 카드를 만들 때의 메모 상태. 같으면 다시 만들지 않고 재사용 */
+            String stamp;
+            int styleGen = -1;
+
+            /** 디자인·밝기만 바뀌었을 때: 카드를 새로 만들지 않고 글자색만 바꾼다 */
+            void restyle() {
+                if (styleGen == NotesListWindow.styleGen) return;
+                styleGen = NotesListWindow.styleGen;
+                Theme t = note.theme;
+                Color fg = t.fg();
+                time.setForeground(new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 150));
+                for (FlatButton b : new FlatButton[]{more, star}) {
+                    b.setForeground(fg);
+                    b.hoverColor = t.hover();
+                }
+                body.setForeground(fg);
+                if (pic != null) pic.setForeground(fg);
+                repaint();
+            }
 
             JPopupMenu popup() {
                 JPopupMenu m = new JPopupMenu();
