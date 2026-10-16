@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.8";
+    static final String VERSION = "1.0.9";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -489,9 +489,9 @@ public class QuickMemo {
     /** 메모 창 모양. 기본은 사각. 각 모양은 외곽선과, 글이 들어갈 안쪽 여백(비율)을 가진다 */
     enum NoteShape {
         Square("사각", .00, .00, .00, .00, 220, 170),
-        Round("동그라미", .15, .15, .15, .13, 300, 300),
-        Heart("하트", .14, .14, .14, .27, 360, 340),
-        Star("별", .23, .23, .31, .21, 420, 400),
+        Round("동그라미", .13, .13, .13, .13, 370, 370),
+        Heart("하트", .10, .10, .14, .30, 360, 340),
+        Star("별", .21, .21, .32, .14, 460, 440),
         Cloud("구름", .08, .08, .25, .08, 300, 230),
         Bubble("말풍선", .00, .00, .00, .12, 240, 200);
 
@@ -521,19 +521,27 @@ public class QuickMemo {
                     double arc = Math.min(cute() ? 22 : 8, Math.min(w, h) * .25);   // 작은 칩에서도 사각으로 보이게
                     return new java.awt.geom.RoundRectangle2D.Double(x, y, w, h, arc, arc);
                 }
-                case Round -> { return new java.awt.geom.Ellipse2D.Double(x, y, w, h); }
-                case Heart -> {
-                    p.moveTo(.50, .97);
-                    p.curveTo(.22, .78, .00, .58, .01, .34);
-                    p.curveTo(.02, .13, .19, .02, .34, .03);
-                    p.curveTo(.43, .04, .48, .10, .50, .17);
-                    p.curveTo(.52, .10, .57, .04, .66, .03);
-                    p.curveTo(.81, .02, .98, .13, .99, .34);
-                    p.curveTo(1.0, .58, .78, .78, .50, .97);
+                case Round -> {                                      // 살짝 네모난 동그라미 (슈퍼타원): 글 쓸 자리가 넓다
+                    for (int k = 0; k < 96; k++) {
+                        double a = 2 * Math.PI * k / 96, c = Math.cos(a), s = Math.sin(a);
+                        double px = .5 + .5 * Math.signum(c) * Math.pow(Math.abs(c), 2 / 2.3);
+                        double py = .5 + .5 * Math.signum(s) * Math.pow(Math.abs(s), 2 / 2.3);
+                        if (k == 0) p.moveTo(px, py); else p.lineTo(px, py);
+                    }
+                    p.closePath();
+                }
+                case Heart -> {                                      // 아래가 통통한 하트
+                    p.moveTo(.50, 1.0);
+                    p.curveTo(.40, .95, .00, .80, .00, .40);
+                    p.curveTo(.00, .14, .14, .00, .30, .00);
+                    p.curveTo(.41, .00, .48, .06, .50, .14);
+                    p.curveTo(.52, .06, .59, .00, .70, .00);
+                    p.curveTo(.86, .00, 1.0, .14, 1.0, .40);
+                    p.curveTo(1.0, .80, .60, .95, .50, 1.0);
                     p.closePath();
                 }
                 case Star -> {                                       // 통통하고 끝이 둥근 별
-                    double cx = .5, cy = .54, ro = .5, ri = .5 * .58;
+                    double cx = .5, cy = .54, ro = .5, ri = .5 * .66;
                     double[][] pts = new double[10][];
                     for (int k = 0; k < 10; k++) {
                         double r = k % 2 == 0 ? ro : ri, a = -Math.PI / 2 + k * Math.PI / 5;
@@ -1185,6 +1193,7 @@ public class QuickMemo {
     static class FlatButton extends JButton {
         Color hoverColor = new Color(0, 0, 0, 28);
         boolean active;
+        boolean grabbed;                                       // 끌어서 순서를 바꾸는 중
 
         FlatButton(String text, String tip) {
             super(text);
@@ -1200,7 +1209,20 @@ public class QuickMemo {
 
         @Override
         protected void paintComponent(Graphics g) {
-            if (active || getModel().isRollover()) {               // 몽글몽글한 알약 모양 강조
+            if (grabbed) {                                         // 잡힌 버튼: 진한 바탕 + 테두리 + 그림자로 들어 올린 느낌
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                Color f = getForeground();
+                int arc = Math.min(getHeight() - 2, cute() ? 16 : 8);
+                g2.setColor(new Color(0, 0, 0, 30));
+                g2.fillRoundRect(2, 3, getWidth() - 3, getHeight() - 3, arc, arc);
+                g2.setColor(new Color(f.getRed(), f.getGreen(), f.getBlue(), 45));
+                g2.fillRoundRect(1, 0, getWidth() - 3, getHeight() - 3, arc, arc);
+                g2.setColor(new Color(f.getRed(), f.getGreen(), f.getBlue(), 160));
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawRoundRect(1, 0, getWidth() - 3, getHeight() - 3, arc, arc);
+                g2.dispose();
+            } else if (active || getModel().isRollover()) {        // 몽글몽글한 알약 모양 강조
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setColor(active ? new Color(hoverColor.getRed(), hoverColor.getGreen(), hoverColor.getBlue(),
@@ -1856,7 +1878,7 @@ public class QuickMemo {
     // ===================================================================== 노트 창
     static final class NoteWindow extends JFrame {
         /** 그림자를 그릴 바깥 여백 (이 여백 가장자리를 잡으면 크기 조절) */
-        static final int M = 12, EDGE = 10, HEADER_H = 34;
+        static final int M = 12, EDGE = 10, RING = 14, HEADER_H = 34;
         static final boolean TRANSLUCENT = !GraphicsEnvironment.isHeadless()
                 && GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice()
                     .isWindowTranslucencySupported(GraphicsDevice.WindowTranslucency.PERPIXEL_TRANSLUCENT);
@@ -2183,6 +2205,8 @@ public class QuickMemo {
                     if (!dragging && start != null && start.distance(e.getPoint()) < 6) return;
                     dragging = true;
                     dragSuppress = true;
+                    b.grabbed = true;
+                    b.repaint();
                     b.setCursor(Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR));
                     Point p = SwingUtilities.convertPoint(b, e.getPoint(), formatBar);
                     int target = -1, cur = -1;
@@ -2202,6 +2226,8 @@ public class QuickMemo {
 
                 public void mouseReleased(MouseEvent e) {
                     b.setCursor(Cursor.getDefaultCursor());
+                    b.grabbed = false;
+                    b.repaint();
                     if (dragging) app.saveFormatOrder(currentFormatOrder());
                     dragging = false;
                     SwingUtilities.invokeLater(() -> dragSuppress = false);
@@ -2310,6 +2336,20 @@ public class QuickMemo {
                 return new java.awt.geom.Rectangle2D.Double(M, M - 3, Math.max(1, getWidth() - 2 * M), Math.max(1, getHeight() - 2 * M));
             }
 
+            Shape ring;
+            String ringKey;
+
+            /** 모양 테두리 안팎 RING/2 px 띠: 여기에 마우스를 대면 크기 조절 */
+            Shape edgeRing() {
+                String key = note.shape + "/" + getWidth() + "x" + getHeight();
+                if (!key.equals(ringKey)) {
+                    var b = box();
+                    ring = new BasicStroke(RING).createStrokedShape(note.shape.outline(b.getX(), b.getY(), b.getWidth(), b.getHeight()));
+                    ringKey = key;
+                }
+                return ring;
+            }
+
             @Override
             public Insets getInsets() {
                 NoteShape s = note.shape;
@@ -2333,6 +2373,7 @@ public class QuickMemo {
                     band.subtract(new java.awt.geom.Area(new Rectangle(EDGE, EDGE, getWidth() - 2 * EDGE, getHeight() - 2 * EDGE)));
                     g2.setColor(new Color(0, 0, 0, 1));
                     g2.fill(band);
+                    g2.fill(edgeRing());                              // 모양 바로 바깥도 마우스를 받게
                     Shape shadow = java.awt.geom.AffineTransform.getTranslateInstance(0, 4).createTransformedShape(sh);
                     for (int i = 7; i >= 1; i--) {                     // 몽글한 그림자
                         g2.setColor(new Color(120, 80, 60, 6));
@@ -2855,7 +2896,12 @@ public class QuickMemo {
                 if (p.x >= c.getWidth() - EDGE) e |= 2;
                 if (p.y < EDGE) e |= 4;
                 if (p.y >= c.getHeight() - EDGE) e |= 8;
-                return e;
+                if (e != 0 || !content.edgeRing().contains(p)) return e;
+                // 모양 테두리 근처: 가운데에서 본 방향(8방향)으로 크기 조절
+                var b = content.box();
+                double a = Math.toDegrees(Math.atan2(p.y - b.getCenterY(), p.x - b.getCenterX()));
+                int oct = (int) Math.floorMod(Math.round(a / 45), 8);  // 0=오른쪽, 2=아래, 4=왼쪽, 6=위
+                return new int[]{2, 10, 8, 9, 1, 5, 4, 6}[oct];
             }
 
             public void mouseMoved(MouseEvent e) {
