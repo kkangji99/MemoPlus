@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.10";
+    static final String VERSION = "1.0.11";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -519,7 +519,7 @@ public class QuickMemo {
         Round("동그라미", .13, .13, .13, .05, 340, 340),
         Heart("하트", .10, .10, .14, .12, 360, 340),
         Star("별", .21, .21, .32, .15, 440, 420),
-        Cloud("구름", .08, .08, .25, .08, 300, 230),
+        Cloud("구름", .08, .08, .25, .08, 340, 300),
         Bubble("말풍선", .00, .00, .00, .12, 240, 200);
 
         final String label;
@@ -1940,7 +1940,7 @@ public class QuickMemo {
     // ===================================================================== 노트 창
     static final class NoteWindow extends JFrame {
         /** 그림자를 그릴 바깥 여백 (이 여백 가장자리를 잡으면 크기 조절) */
-        static final int M = 12, EDGE = 10, RING = 14, HEADER_H = 34;
+        static final int M = 12, EDGE = 10, RING = 14, HEADER_H = 34, GARLAND_H = 18;
         static final boolean TRANSLUCENT = !GraphicsEnvironment.isHeadless()
                 && GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice()
                     .isWindowTranslucencySupported(GraphicsDevice.WindowTranslucency.PERPIXEL_TRANSLUCENT);
@@ -2322,6 +2322,10 @@ public class QuickMemo {
         // ---------- 테마
         void applyTheme() {
             Theme t = note.theme;
+            int garland = xmas() ? GARLAND_H : 0;                   // 크리스마스: 가랜드 자리만큼 띠를 키워 글을 가리지 않게
+            header.setPreferredSize(new Dimension(10, HEADER_H + garland));
+            header.setBorder(new EmptyBorder(0, 0, garland, 0));
+            header.revalidate();
             pane.setBackground(t.body);                            // 체크박스·아이콘 배경색 참조용 (불투명 아님)
             pane.setForeground(t.fg());
             pane.setCaretColor(t.accent);
@@ -2358,6 +2362,7 @@ public class QuickMemo {
             setMinimumSize(min);
             if (getWidth() < min.width || getHeight() < min.height)
                 setSize(Math.max(getWidth(), min.width), Math.max(getHeight(), min.height));
+            if (popup != null && popup.isVisible()) placePopup();     // 메모가 커져도 메뉴가 가리지 않게
             note.updatedAt = nowTicks();
             app.store.save(note);
             content.revalidate();
@@ -2375,15 +2380,29 @@ public class QuickMemo {
         void showMenu(Component anchor) {
             if (popup != null && popup.isVisible()) { popup.dispose(); return; }
             popup = new MenuPopup();
-            Point p = anchor.getLocationOnScreen();
-            Rectangle scr = getGraphicsConfiguration().getBounds();
-            int x = Math.max(scr.x, Math.min(p.x + anchor.getWidth() - popup.getWidth() + 10, scr.x + scr.width - popup.getWidth()));
-            int y = p.y + anchor.getHeight() + 2;
-            if (y + popup.getHeight() > scr.y + scr.height) y = p.y - popup.getHeight() - 2;
-            popup.setLocation(x, y);
+            placePopup();
             popup.setVisible(true);
             popup.toFront();
             popup.getContentPane().requestFocusInWindow();
+        }
+
+        /** 메모 옆(오른쪽, 자리가 없으면 왼쪽, 그것도 없으면 아래/위)에 띄워 색·모양을 바꾸는 모습이 가려지지 않게 */
+        void placePopup() {
+            if (popup == null) return;
+            Rectangle scr = getGraphicsConfiguration().getBounds();
+            Rectangle me = getBounds();
+            int pw = popup.getWidth(), ph = popup.getHeight(), gap = 4;
+            int x = me.x + me.width - M + gap;
+            if (x + pw > scr.x + scr.width) x = me.x + M - gap - pw;
+            if (x < scr.x) {
+                x = Math.max(scr.x, Math.min(me.x + (me.width - pw) / 2, scr.x + scr.width - pw));
+                int y = me.y + me.height - M + gap;
+                if (y + ph > scr.y + scr.height) y = Math.max(scr.y, me.y + M - gap - ph);
+                popup.setLocation(x, y);
+            } else {
+                int y = Math.max(scr.y, Math.min(me.y + M, scr.y + scr.height - ph));
+                popup.setLocation(x, y);
+            }
         }
 
         // ---------- 스티커 모양을 그리는 바탕
@@ -2488,7 +2507,7 @@ public class QuickMemo {
                 g2.fill(sh);
                 Shape oldClip = g2.getClip();
                 g2.clip(sh);
-                int bandBottom = getInsets().top + HEADER_H - 2;
+                int bandBottom = getInsets().top + header.getPreferredSize().height - 2;
                 g2.setColor(t.header);
                 g2.fillRect(0, 0, getWidth(), bandBottom);
                 if (xmas()) {
@@ -2532,7 +2551,7 @@ public class QuickMemo {
             /** 크리스마스: 색 띠 아래로 늘어진 줄에 매달린 오너먼트 */
             void paintGarland(Graphics2D g2, int bandBottom) {
                 int w = getWidth(), step = 34;
-                double y0 = bandBottom - 3, sag = 6;
+                double y0 = bandBottom - GARLAND_H, sag = 6;            // 띠 안에서 끝나게 (오너먼트 아래 끝 = 띠 아래 끝)
                 java.awt.geom.Path2D.Double rope = new java.awt.geom.Path2D.Double();
                 rope.moveTo(0, y0);
                 for (int x = 0; x < w; x += step) rope.quadTo(x + step / 2.0, y0 + sag * 2, x + step, y0);
