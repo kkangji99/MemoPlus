@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.12";
+    static final String VERSION = "1.0.13";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -408,30 +408,66 @@ public class QuickMemo {
 
     // ===================================================================== 테마
     // ===================================================================== 디자인 스타일
-    /** 화면 스타일: 심플(기본, 원래 스티커 메모 느낌) / 아기자기(파스텔·둥근 모양·마스킹테이프) / 크리스마스(아기자기 + 빨강·초록, 가랜드·눈송이) */
+    /**
+     * 화면 스타일: 심플(기본, 원래 스티커 메모 느낌) / 아기자기(파스텔·둥근 모양·마스킹테이프) /
+     * 크리스마스·봄·여름·가을·겨울(아기자기 + 계절 색, 위쪽 띠 장식, 본문 무늬)
+     */
     enum Style {
-        Simple("심플"), Cute("아기자기"), Christmas("크리스마스");
+        //         이름,        설명,             포인트,   목록 배경(밝게/어둡게), 아이콘
+        Simple("심플", "깔끔한 기본", 0x0067C0, 0xF3F3F3, 0x202020, null),
+        Cute("아기자기", "파스텔 · 테이프", 0xFF8FB1, 0xFFF9F0, 0x2A2633, "heart"),
+        Christmas("크리스마스", "트리 · 눈송이", 0xD63A3A, 0xFBF6EE, 0x14261D, "tree"),
+        Spring("봄", "벚꽃 · 꽃잎", 0xE87A9A, 0xFFF8FA, 0x2B2430, "blossom"),
+        Summer("여름", "바다 · 물방울", 0x1E9BD7, 0xF3FAFF, 0x152231, "sun"),
+        Autumn("가을", "단풍 · 낙엽", 0xD9572B, 0xFCF6EE, 0x2A211B, "leaf"),
+        Winter("겨울", "고드름 · 눈", 0x4C8FC9, 0xF5F8FC, 0x171C27, "snowflake");
 
-        final String label;
+        final String label, desc, icon;
+        final Color accent, listLight, listDark;
 
-        Style(String label) { this.label = label; }
+        Style(String label, String desc, int accent, int listLight, int listDark, String icon) {
+            this.label = label;
+            this.desc = desc;
+            this.accent = new Color(accent);
+            this.listLight = new Color(listLight);
+            this.listDark = new Color(listDark);
+            this.icon = icon;
+        }
+
+        /** 위쪽 띠 아래에 장식(가랜드·꽃·물결·단풍·고드름)이 붙는 계절 스타일 */
+        boolean decorated() { return ordinal() >= Christmas.ordinal(); }
 
         static Style parse(String s) {
             try { return valueOf(s); } catch (Exception e) { return Simple; }
+        }
+
+        /** 계절 추천: 3~5월 봄, 6~8월 여름, 9~11월 가을, 12~2월 겨울 */
+        static Style forSeason(LocalDate d) {
+            int m = d.getMonthValue();
+            return m >= 3 && m <= 5 ? Spring : m >= 6 && m <= 8 ? Summer : m >= 9 && m <= 11 ? Autumn : Winter;
         }
     }
 
     static volatile Style STYLE = Style.Simple;
 
-    /** 둥근 모양·통통한 선 등 아기자기 계열 (크리스마스 포함) */
-    static boolean cute() { return STYLE == Style.Cute || STYLE == Style.Christmas; }
+    /** 둥근 모양·통통한 선 등 아기자기 계열 (계절 스타일 포함) */
+    static boolean cute() { return STYLE != Style.Simple; }
 
     static boolean xmas() { return STYLE == Style.Christmas; }
 
+    /** 위쪽 띠 장식이 있는 스타일 */
+    static boolean decorated() { return STYLE.decorated(); }
+
     static final Color XMAS_RED = new Color(0xD63A3A), XMAS_GREEN = new Color(0x2E8B57), XMAS_GOLD = new Color(0xE8B83A);
 
-    /** 스타일 포인트 색: 아기자기 분홍 / 크리스마스 빨강 */
-    static Color styleAccent() { return xmas() ? XMAS_RED : PINK; }
+    /** 스타일 포인트 색 (아기자기 분홍, 크리스마스 빨강, 계절마다 다름) */
+    static Color styleAccent() { return STYLE == Style.Simple ? PINK : STYLE.accent; }
+
+    /** 포인트 색을 투명하게 */
+    static Color styleAccent(int alpha) {
+        Color c = styleAccent();
+        return new Color(c.getRed(), c.getGreen(), c.getBlue(), alpha);
+    }
 
     /** 스타일을 바꾸면 모든 테마의 색이 그 스타일 팔레트로 바뀐다 */
     static void applyStyle(Style s) {
@@ -481,9 +517,57 @@ public class QuickMemo {
             {"고요한 밤", 0x1F3A2E, 0x17301F, 0xF0B43C},
         };
 
+        static final Object[][] SPRING = {
+            {"개나리", 0xFFF8DC, 0xFBE7A1, 0xE0B400},
+            {"새싹", 0xEEF8E4, 0xCDEBB4, 0x6BAF3C},
+            {"벚꽃", 0xFFF0F4, 0xFBCFDC, 0xE87A9A},
+            {"라일락", 0xF5EEFC, 0xE2D1F5, 0xA27BD6},
+            {"봄하늘", 0xEEF6FD, 0xCFE6FA, 0x5B9FE0},
+            {"봄비", 0xF6F6F4, 0xE4E6E1, 0x9AA39A},
+            {"봄밤", 0x3B3346, 0x2E2838, 0xF5A3BF},
+        };
+        static final Object[][] SUMMER = {
+            {"레모네이드", 0xFFFBD6, 0xFFEE8A, 0xE0B000},
+            {"수박", 0xEAFBEF, 0xB5EDC4, 0x2FB45A},
+            {"복숭아", 0xFFF0EA, 0xFFD0BE, 0xFF8A65},
+            {"포도", 0xF3EDFF, 0xD9CCFF, 0x7E5BEF},
+            {"바다", 0xE6F7FF, 0xA9E0FA, 0x1E9BD7},
+            {"모래", 0xFBF6EC, 0xEEDFC4, 0xC79A55},
+            {"여름밤", 0x1F2E44, 0x172438, 0x7FD3FF},
+        };
+        static final Object[][] AUTUMN = {
+            {"은행", 0xFFF6DA, 0xF9DE8E, 0xD9A21B},
+            {"올리브", 0xF2F3E2, 0xDADDB3, 0x8A8F3A},
+            {"단풍", 0xFFEDE6, 0xF8C3AE, 0xD9572B},
+            {"포도주", 0xF6ECEF, 0xE3C9D2, 0x9C3D5A},
+            {"가을하늘", 0xEAF3FA, 0xC8DFF0, 0x4A86B8},
+            {"갈대", 0xF6F2EA, 0xE5DCCB, 0xA28B66},
+            {"가을밤", 0x3A2E26, 0x2C221C, 0xF0A04B},
+        };
+        static final Object[][] WINTER = {
+            {"군고구마", 0xFFF6E6, 0xF5DDB5, 0xC98A3A},
+            {"상록수", 0xECF4F0, 0xC6DED3, 0x3D7D63},
+            {"털장갑", 0xFFF0F2, 0xF6CFD6, 0xD46A82},
+            {"새벽", 0xF1EFFA, 0xD8D4F0, 0x6E64C2},
+            {"눈꽃", 0xEEF6FC, 0xCFE5F6, 0x4C8FC9},
+            {"함박눈", 0xF8F9FB, 0xE4E8EE, 0x8C97A6},
+            {"겨울밤", 0x1E2433, 0x161B28, 0x9CC8FF},
+        };
+
+        static Object[][] palette(Style s) {
+            return switch (s) {
+                case Christmas -> XMAS;
+                case Spring -> SPRING;
+                case Summer -> SUMMER;
+                case Autumn -> AUTUMN;
+                case Winter -> WINTER;
+                default -> null;
+            };
+        }
+
         void useStyle(Style s) {
-            if (s == Style.Christmas) {
-                Object[] x = XMAS[ordinal()];
+            if (palette(s) != null) {
+                Object[] x = palette(s)[ordinal()];
                 label = (String) x[0];
                 body = new Color((Integer) x[1]);
                 header = new Color((Integer) x[2]);
@@ -502,7 +586,7 @@ public class QuickMemo {
         Color hover() { return dark ? new Color(255, 255, 255, 38) : cute() ? new Color(90, 70, 54, 26) : new Color(0, 0, 0, 26); }
         Color menuBg() { return dark ? (cute() ? new Color(0x2F2A3B) : new Color(0x2B2B2B)) : (cute() ? new Color(0xFFFDF8) : Color.WHITE); }
         Color menuFg() { return fg(); }
-        Color menuHover() { return dark ? new Color(255, 255, 255, 28) : xmas() ? new Color(214, 58, 58, 40) : cute() ? new Color(255, 160, 190, 50) : new Color(0, 0, 0, 18); }
+        Color menuHover() { return dark ? new Color(255, 255, 255, 28) : cute() ? styleAccent(STYLE == Style.Cute ? 50 : 38) : new Color(0, 0, 0, 18); }
 
         static Theme parse(String s) {
             try { return valueOf(s); } catch (Exception e) { return Yellow; }
@@ -1124,6 +1208,8 @@ public class QuickMemo {
 
         boolean darkMode() { return Boolean.parseBoolean(settings.getProperty("darkMode", "false")); }
         boolean confirmDelete() { return Boolean.parseBoolean(settings.getProperty("confirmDelete", "true")); }
+        /** 계절에 맞춰 디자인 자동 변경 (기본 꺼짐) */
+        boolean autoSeason() { return Boolean.parseBoolean(settings.getProperty("autoSeason", "false")); }
         Theme defaultTheme() { return Theme.parse(settings.getProperty("defaultNoteColor", "Yellow")); }
 
         void set(String k, String v) {
@@ -1332,6 +1418,33 @@ public class QuickMemo {
                     dot(g2, .62, .68, .045);
                     g2.setColor(XMAS_GOLD);
                     g2.fill(NoteShape.Star.outline(s * .38, s * .02, s * .24, s * .22));
+                }
+                case "blossom" -> Deco.blossom(g2, s * .5, s * .5, s * .46, new Color(0xF48FB1));
+                case "sun" -> {
+                    g2.setColor(new Color(0xF5B82E));
+                    g2.setStroke(new BasicStroke(Math.max(1.6f, s / 11f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    for (int k = 0; k < 8; k++) {
+                        double a = Math.PI / 4 * k;
+                        line(g2, .5 + Math.cos(a) * .32, .5 + Math.sin(a) * .32, .5 + Math.cos(a) * .44, .5 + Math.sin(a) * .44);
+                    }
+                    g2.setColor(new Color(0xFFCB45));
+                    dot(g2, .5, .5, .22);
+                }
+                case "leaf" -> {
+                    g2.setColor(new Color(0xE0582B));
+                    g2.fill(Deco.maple(s * .5, s * .48, s * .42, 0));
+                }
+                case "snowflake" -> {
+                    g2.setColor(new Color(0x4C8FC9));
+                    for (int k = 0; k < 3; k++) {
+                        double a = Math.PI / 3 * k + Math.PI / 2;
+                        line(g2, .5 - Math.cos(a) * .4, .5 - Math.sin(a) * .4, .5 + Math.cos(a) * .4, .5 + Math.sin(a) * .4);
+                        for (int sgn : new int[]{-1, 1}) {               // 가지 끝 V자
+                            double ex = .5 + sgn * Math.cos(a) * .28, ey = .5 + sgn * Math.sin(a) * .28;
+                            line(g2, ex, ey, ex + sgn * Math.cos(a + .7) * .12, ey + sgn * Math.sin(a + .7) * .12);
+                            line(g2, ex, ey, ex + sgn * Math.cos(a - .7) * .12, ey + sgn * Math.sin(a - .7) * .12);
+                        }
+                    }
                 }
                 case "star", "starFilled" -> {
                     Shape st = NoteShape.Star.outline(s * .06, s * .04, s * .88, s * .88);
@@ -1574,6 +1687,211 @@ public class QuickMemo {
         return img;
     }
 
+    /**
+     * 계절 스타일 장식. band: 위쪽 색 띠 아래 끝 H px 안에 그리는 줄 장식 (글을 가리지 않음),
+     * pattern: 본문에 은은하게 흩뿌린 무늬 (메모마다 같은 자리).
+     */
+    static final class Deco {
+        static final int H = 18;
+
+        static void band(Graphics2D g, Style s, Theme t, int w, int bottom) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            double y0 = bottom - H;
+            switch (s) {
+                case Christmas -> {                                  // 늘어진 줄에 매달린 오너먼트
+                    int step = 34;
+                    double sag = 6;
+                    java.awt.geom.Path2D.Double rope = new java.awt.geom.Path2D.Double();
+                    rope.moveTo(0, y0);
+                    for (int x = 0; x < w; x += step) rope.quadTo(x + step / 2.0, y0 + sag * 2, x + step, y0);
+                    g2.setColor(new Color(0x2E6B45));
+                    g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g2.draw(rope);
+                    Color[] cs = {XMAS_RED, XMAS_GOLD, XMAS_GREEN};
+                    for (int i = 0, x = step / 2; x < w; i++, x += step) {
+                        double cy = y0 + sag + 6, r = 5;
+                        g2.setColor(new Color(0xB8B8B8));
+                        g2.fill(new java.awt.geom.Rectangle2D.Double(x - 2, cy - r - 3, 4, 3));
+                        g2.setColor(cs[i % 3]);
+                        g2.fill(new java.awt.geom.Ellipse2D.Double(x - r, cy - r, 2 * r, 2 * r));
+                        shine(g2, x, cy, r);
+                    }
+                }
+                case Spring -> {                                     // 벚꽃 가지
+                    java.awt.geom.Path2D.Double branch = new java.awt.geom.Path2D.Double();
+                    branch.moveTo(0, y0 + 7);
+                    for (int x = 0; x < w; x += 60) branch.curveTo(x + 20, y0 + 3, x + 40, y0 + 11, x + 60, y0 + 7);
+                    g2.setColor(new Color(0x8A6450));
+                    g2.draw(branch);
+                    Color[] cs = {new Color(0xF7A8C0), new Color(0xFBC7D6), new Color(0xF48FB1)};
+                    for (int i = 0, x = 16; x < w; i++, x += 30) {
+                        double cy = y0 + 7 + (i % 2 == 0 ? 3 : -1);
+                        blossom(g2, x, cy, i % 3 == 2 ? 5 : 6.5, cs[i % 3]);
+                        if (i % 2 == 0) {
+                            g2.setColor(new Color(0x7DB85A));
+                            g2.fill(leafShape(x + 9, y0 + 7, 5, 2.4, -0.5));
+                        }
+                    }
+                }
+                case Summer -> {                                     // 출렁이는 물결 + 거품
+                    Color sea = new Color(0x7CCBEF), deep = new Color(0x3FA9DE);
+                    for (int layer = 0; layer < 2; layer++) {
+                        double base = y0 + (layer == 0 ? 6 : 11), amp = layer == 0 ? 3 : 2.5, len = layer == 0 ? 40 : 30, ph = layer == 0 ? 0 : 15;
+                        java.awt.geom.Path2D.Double wave = new java.awt.geom.Path2D.Double();
+                        wave.moveTo(0, bottom);
+                        wave.lineTo(0, base);
+                        for (double x = 0; x <= w + len; x += 2)
+                            wave.lineTo(x, base + Math.sin((x + ph) / len * 2 * Math.PI) * amp);
+                        wave.lineTo(w + len, bottom);
+                        wave.closePath();
+                        g2.setColor(layer == 0 ? new Color(sea.getRed(), sea.getGreen(), sea.getBlue(), 170) : deep);
+                        g2.fill(wave);
+                    }
+                    g2.setColor(new Color(255, 255, 255, 220));
+                    for (int x = 10; x < w; x += 23) g2.fill(new java.awt.geom.Ellipse2D.Double(x, y0 + 2 + (x / 23 % 3), 3, 3));
+                }
+                case Autumn -> {                                     // 줄에 매단 단풍잎
+                    java.awt.geom.Path2D.Double rope = new java.awt.geom.Path2D.Double();
+                    int step = 36;
+                    rope.moveTo(0, y0 + 1);
+                    for (int x = 0; x < w; x += step) rope.quadTo(x + step / 2.0, y0 + 7, x + step, y0 + 1);
+                    g2.setColor(new Color(0x8A6450));
+                    g2.setStroke(new BasicStroke(1.3f));
+                    g2.draw(rope);
+                    Color[] cs = {new Color(0xE0582B), new Color(0xF2A33A), new Color(0xC7372F), new Color(0xE8C547)};
+                    for (int i = 0, x = step / 2; x < w; i++, x += step) {
+                        g2.setColor(cs[i % 4]);
+                        g2.fill(maple(x, y0 + 9, 9, (i % 2 == 0 ? .2 : -.2)));
+                    }
+                }
+                case Winter -> {                                     // 눈 쌓인 처마 + 고드름
+                    Random rnd = new Random(7);
+                    Color ice = new Color(0xBFE3F7);
+                    for (int x = 3; x < w; x += 9 + rnd.nextInt(5)) {
+                        double len = 6 + rnd.nextInt(10);
+                        java.awt.geom.Path2D.Double ic = new java.awt.geom.Path2D.Double();
+                        ic.moveTo(x - 3, y0 + 4);
+                        ic.quadTo(x - 1, y0 + 4 + len * .6, x, y0 + 4 + len);
+                        ic.quadTo(x + 1, y0 + 4 + len * .6, x + 3, y0 + 4);
+                        ic.closePath();
+                        g2.setColor(ice);
+                        g2.fill(ic);
+                        g2.setColor(new Color(255, 255, 255, 200));
+                        g2.draw(new java.awt.geom.Line2D.Double(x - 1, y0 + 6, x - .5, y0 + 4 + len * .5));
+                    }
+                    java.awt.geom.Path2D.Double snow = new java.awt.geom.Path2D.Double();
+                    snow.moveTo(0, y0 - 2);
+                    snow.lineTo(w, y0 - 2);
+                    snow.lineTo(w, y0 + 4);
+                    for (double x = w; x >= 0; x -= 14) snow.quadTo(x - 7, y0 + 8, x - 14, y0 + 4);
+                    snow.closePath();
+                    g2.setColor(Color.WHITE);
+                    g2.fill(snow);
+                    g2.setColor(new Color(0, 0, 0, 18));
+                    g2.draw(snow);
+                }
+                default -> { }
+            }
+            g2.dispose();
+        }
+
+        static void pattern(Graphics2D g, Style s, Theme t, long seed, int w, int top, int h) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Random rnd = new Random(seed);
+            int n = Math.max(6, w * Math.max(0, h - top) / 9000);
+            Color c = t.dark ? new Color(255, 255, 255, 50) : new Color(t.accent.getRed(), t.accent.getGreen(), t.accent.getBlue(), 40);
+            g2.setColor(c);
+            g2.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            for (int i = 0; i < n; i++) {
+                double x = rnd.nextDouble() * w, y = top + 8 + rnd.nextDouble() * Math.max(1, h - top - 16), r = 4 + rnd.nextDouble() * 5, rot = rnd.nextDouble() * Math.PI;
+                switch (s) {
+                    case Christmas, Winter -> {                      // 눈송이
+                        for (int k = 0; k < 3; k++) {
+                            double a = Math.PI / 3 * k + Math.PI / 6;
+                            g2.draw(new java.awt.geom.Line2D.Double(x - Math.cos(a) * r, y - Math.sin(a) * r, x + Math.cos(a) * r, y + Math.sin(a) * r));
+                        }
+                    }
+                    case Spring -> g2.fill(petal(x, y, r * .9, rot));    // 흩날리는 꽃잎
+                    case Summer -> g2.draw(new java.awt.geom.Ellipse2D.Double(x - r * .6, y - r * .6, r * 1.2, r * 1.2));   // 물방울
+                    case Autumn -> g2.fill(leafShape(x, y, r, r * .45, rot));    // 낙엽
+                    default -> { }
+                }
+            }
+            g2.dispose();
+        }
+
+        static void shine(Graphics2D g2, double cx, double cy, double r) {
+            g2.setColor(new Color(255, 255, 255, 170));
+            g2.fill(new java.awt.geom.Ellipse2D.Double(cx - r * .5, cy - r * .55, r * .6, r * .5));
+        }
+
+        /** 다섯 꽃잎 꽃 */
+        static void blossom(Graphics2D g2, double cx, double cy, double r, Color c) {
+            g2.setColor(c);
+            for (int k = 0; k < 5; k++) {
+                double a = -Math.PI / 2 + k * 2 * Math.PI / 5;
+                g2.fill(new java.awt.geom.Ellipse2D.Double(cx + Math.cos(a) * r * .55 - r * .45, cy + Math.sin(a) * r * .55 - r * .45, r * .9, r * .9));
+            }
+            g2.setColor(new Color(0xF6D365));
+            g2.fill(new java.awt.geom.Ellipse2D.Double(cx - r * .25, cy - r * .25, r * .5, r * .5));
+        }
+
+        /** 끝이 살짝 갈라진 벚꽃잎 */
+        static Shape petal(double cx, double cy, double r, double rot) {
+            java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
+            p.moveTo(0, r);
+            p.curveTo(-r * .9, r * .3, -r * .6, -r * .8, -r * .15, -r * .8);
+            p.lineTo(0, -r * .55);
+            p.lineTo(r * .15, -r * .8);
+            p.curveTo(r * .6, -r * .8, r * .9, r * .3, 0, r);
+            p.closePath();
+            java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(cx, cy);
+            at.rotate(rot);
+            return at.createTransformedShape(p);
+        }
+
+        /** 길쭉한 잎 */
+        static Shape leafShape(double cx, double cy, double len, double wid, double rot) {
+            java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
+            p.moveTo(-len, 0);
+            p.quadTo(0, -wid * 2, len, 0);
+            p.quadTo(0, wid * 2, -len, 0);
+            p.closePath();
+            java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(cx, cy);
+            at.rotate(rot);
+            return at.createTransformedShape(p);
+        }
+
+        /** 단풍잎: 다섯 갈래 잎(갈래마다 옆 톱니) + 아래 꼭지 */
+        static Shape maple(double cx, double cy, double r, double rot) {
+            java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
+            p.moveTo(0, r * .25);
+            double[] angles = {150, 210, 270, 330, 30};               // 화면 좌표(아래가 +y): 왼아래, 왼위, 위, 오위, 오아래
+            double[] lens = {.55, .85, 1, .85, .55};
+            for (int k = 0; k < 5; k++) {
+                double a = Math.toRadians(angles[k]), l = r * lens[k];
+                double between = Math.toRadians(angles[k] - 30), nb = r * .42;
+                p.lineTo(Math.cos(between) * nb, Math.sin(between) * nb);                       // 갈래 사이 오목한 곳
+                p.lineTo(Math.cos(a - .42) * l * .72, Math.sin(a - .42) * l * .72);           // 옆 톱니
+                p.lineTo(Math.cos(a - .16) * l * .78, Math.sin(a - .16) * l * .78);
+                p.lineTo(Math.cos(a) * l, Math.sin(a) * l);                                  // 갈래 끝
+                p.lineTo(Math.cos(a + .16) * l * .78, Math.sin(a + .16) * l * .78);
+                p.lineTo(Math.cos(a + .42) * l * .72, Math.sin(a + .42) * l * .72);
+            }
+            double end = Math.toRadians(60);
+            p.lineTo(Math.cos(end) * r * .42, Math.sin(end) * r * .42);
+            p.closePath();
+            java.awt.geom.Area a = new java.awt.geom.Area(p);
+            a.add(new java.awt.geom.Area(new java.awt.geom.Rectangle2D.Double(-.6, r * .1, 1.2, r * .85)));
+            java.awt.geom.AffineTransform at = java.awt.geom.AffineTransform.getTranslateInstance(cx, cy);
+            at.rotate(rot);
+            return at.createTransformedShape(a);
+        }
+    }
+
     /** 얇고 둥근 스크롤바 */
     static final class CuteScrollBarUI extends javax.swing.plaf.basic.BasicScrollBarUI {
         @Override protected JButton createDecreaseButton(int o) { return zero(); }
@@ -1687,7 +2005,10 @@ public class QuickMemo {
                 JOptionPane.showMessageDialog(null, "저장소를 열 수 없습니다: " + e.getMessage());
                 System.exit(1);
             }
-            applyStyle(Style.parse(store.settings.getProperty("uiStyle", Style.Simple.name())));   // 기본은 심플
+            applyStyle(chosenStyle());                                  // 기본은 심플
+            new javax.swing.Timer(60 * 60 * 1000, e -> {                // 켜 둔 채 계절이 바뀌면 따라 바꿈 (한 시간마다 확인)
+                if (store.autoSeason() && chosenStyle() != STYLE) setStyle(chosenStyle());
+            }).start();
             notes.addAll(store.loadAll());
             for (Note n : new ArrayList<>(notes))                   // 예전에 남은 빈 메모(닫힌 것) 정리
                 if (!n.open && !n.deleted() && isEmptyNote(n)) { notes.remove(n); store.remove(n); }
@@ -1899,6 +2220,18 @@ public class QuickMemo {
             list.applyMode();
         }
 
+        /** 지금 써야 할 디자인: 자동 변경이 켜져 있으면 계절 추천, 아니면 직접 고른 것 */
+        Style chosenStyle() {
+            return store.autoSeason() ? Style.forSeason(LocalDate.now())
+                    : Style.parse(store.settings.getProperty("uiStyle", Style.Simple.name()));
+        }
+
+        /** 계절 자동 변경 켜기/끄기. 끄면 직접 골랐던 디자인으로 돌아감 */
+        void setAutoSeason(boolean on) {
+            store.set("autoSeason", String.valueOf(on));
+            setStyle(chosenStyle());
+        }
+
         /** 디자인 스타일을 바꾸고 열린 모든 창에 바로 적용 */
         void setStyle(Style s) {
             applyStyle(s);
@@ -1940,7 +2273,7 @@ public class QuickMemo {
     // ===================================================================== 노트 창
     static final class NoteWindow extends JFrame {
         /** 그림자를 그릴 바깥 여백 (이 여백 가장자리를 잡으면 크기 조절) */
-        static final int M = 12, EDGE = 10, RING = 14, HEADER_H = 34, GARLAND_H = 18;
+        static final int M = 12, EDGE = 10, RING = 14, HEADER_H = 34, GARLAND_H = Deco.H;
         static final boolean TRANSLUCENT = !GraphicsEnvironment.isHeadless()
                 && GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice()
                     .isWindowTranslucencySupported(GraphicsDevice.WindowTranslucency.PERPIXEL_TRANSLUCENT);
@@ -2326,7 +2659,7 @@ public class QuickMemo {
         // ---------- 테마
         void applyTheme() {
             Theme t = note.theme;
-            int garland = xmas() ? GARLAND_H : 0;                   // 크리스마스: 가랜드 자리만큼 띠를 키워 글을 가리지 않게
+            int garland = decorated() ? GARLAND_H : 0;              // 계절 스타일: 장식 자리만큼 띠를 키워 글을 가리지 않게
             header.setPreferredSize(new Dimension(10, HEADER_H + garland));
             header.setBorder(new EmptyBorder(0, 0, garland, 0));
             header.revalidate();
@@ -2534,9 +2867,9 @@ public class QuickMemo {
                 int bandBottom = getInsets().top + header.getPreferredSize().height - 2;
                 g2.setColor(t.header);
                 g2.fillRect(0, 0, getWidth(), bandBottom);
-                if (xmas()) {
-                    paintSnow(g2, t, bandBottom);
-                    paintGarland(g2, bandBottom);
+                if (decorated()) {
+                    Deco.pattern(g2, STYLE, t, note.id.hashCode(), getWidth(), bandBottom, getHeight());
+                    Deco.band(g2, STYLE, t, getWidth(), bandBottom);
                 } else if (cute()) {
                     // 색 띠 아래 바느질 점선
                     g2.setColor(new Color(255, 255, 255, t.dark ? 70 : 200));
@@ -2554,44 +2887,6 @@ public class QuickMemo {
                 g2.setStroke(new BasicStroke(1.3f));
                 g2.draw(sh);
                 g2.dispose();
-            }
-
-            /** 크리스마스: 본문에 은은한 눈송이 (메모마다 같은 자리) */
-            void paintSnow(Graphics2D g2, Theme t, int top) {
-                Random rnd = new Random(note.id.hashCode());
-                int w = getWidth(), h = getHeight(), n = Math.max(6, w * (h - top) / 9000);
-                Color c = t.dark ? new Color(255, 255, 255, 55) : new Color(t.accent.getRed(), t.accent.getGreen(), t.accent.getBlue(), 38);
-                g2.setColor(c);
-                g2.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-                for (int i = 0; i < n; i++) {
-                    double x = rnd.nextDouble() * w, y = top + 8 + rnd.nextDouble() * Math.max(1, h - top - 16), r = 4 + rnd.nextDouble() * 5;
-                    for (int k = 0; k < 3; k++) {
-                        double a = Math.PI / 3 * k + Math.PI / 6;
-                        g2.draw(new java.awt.geom.Line2D.Double(x - Math.cos(a) * r, y - Math.sin(a) * r, x + Math.cos(a) * r, y + Math.sin(a) * r));
-                    }
-                }
-            }
-
-            /** 크리스마스: 색 띠 아래로 늘어진 줄에 매달린 오너먼트 */
-            void paintGarland(Graphics2D g2, int bandBottom) {
-                int w = getWidth(), step = 34;
-                double y0 = bandBottom - GARLAND_H, sag = 6;            // 띠 안에서 끝나게 (오너먼트 아래 끝 = 띠 아래 끝)
-                java.awt.geom.Path2D.Double rope = new java.awt.geom.Path2D.Double();
-                rope.moveTo(0, y0);
-                for (int x = 0; x < w; x += step) rope.quadTo(x + step / 2.0, y0 + sag * 2, x + step, y0);
-                g2.setColor(new Color(0x2E6B45));
-                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
-                g2.draw(rope);
-                Color[] cs = {XMAS_RED, XMAS_GOLD, XMAS_GREEN};
-                for (int i = 0, x = step / 2; x < w; i++, x += step) {
-                    double cx = x, cy = y0 + sag + 6, r = 5;
-                    g2.setColor(new Color(0xB8B8B8));
-                    g2.fill(new java.awt.geom.Rectangle2D.Double(cx - 2, cy - r - 3, 4, 3));
-                    g2.setColor(cs[i % 3]);
-                    g2.fill(new java.awt.geom.Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
-                    g2.setColor(new Color(255, 255, 255, 170));
-                    g2.fill(new java.awt.geom.Ellipse2D.Double(cx - r * .5, cy - r * .55, r * .6, r * .5));
-                }
             }
         }
 
@@ -3302,7 +3597,7 @@ public class QuickMemo {
 
         Color bg() {
             boolean d = app.store.darkMode();
-            return xmas() ? (d ? new Color(0x14261D) : new Color(0xFBF6EE)) : cute() ? (d ? new Color(0x2A2633) : CREAM) : (d ? new Color(0x202020) : new Color(0xF3F3F3));
+            return d ? STYLE.listDark : STYLE.listLight;
         }
 
         Color fg() {
@@ -3315,11 +3610,11 @@ public class QuickMemo {
             getContentPane().setBackground(bg);
             for (Component c : List.of(scroll.getViewport(), (Component) scroll.getViewport().getView(), cards)) c.setBackground(bg);
             title.setForeground(fg);
-            title.setIcon(xmas() ? new Glyph("tree", 22) : cute() ? new Glyph("heart", 20) : null);
+            title.setIcon(STYLE.icon != null ? new Glyph(STYLE.icon, STYLE == Style.Cute ? 20 : 22) : null);
             for (FlatButton b : buttons) {
                 b.setForeground(fg);
                 b.setBackground(bg);
-                b.hoverColor = app.store.darkMode() ? new Color(255, 255, 255, 40) : xmas() ? new Color(214, 58, 58, 45) : cute() ? new Color(255, 160, 190, 60) : new Color(0, 0, 0, 28);
+                b.hoverColor = app.store.darkMode() ? new Color(255, 255, 255, 40) : cute() ? styleAccent(STYLE == Style.Cute ? 60 : 45) : new Color(0, 0, 0, 28);
             }
             scroll.getVerticalScrollBar().setUI(new CuteScrollBarUI());
             scroll.getVerticalScrollBar().putClientProperty("accent", cute() ? styleAccent() : new Color(0xB0B0B0));
@@ -3371,8 +3666,8 @@ public class QuickMemo {
             if (star) l.setIcon(new Glyph("starFilled", 14));
             l.setIconTextGap(6);
             l.setFont(BASE_FONT.deriveFont(Font.BOLD, 12f));
-            l.setForeground(xmas() ? (app.store.darkMode() ? new Color(0xF28B8B) : new Color(0xC23434)) : cute() ? (app.store.darkMode() ? new Color(0xFFB0CC) : new Color(0xE07799))
-                    : (app.store.darkMode() ? new Color(0xBBBBBB) : new Color(0x666666)));
+            Color ac = styleAccent();
+            l.setForeground(cute() ? (app.store.darkMode() ? ac.brighter() : ac.darker()) : (app.store.darkMode() ? new Color(0xBBBBBB) : new Color(0x666666)));
             l.setBorder(new EmptyBorder(4, 2, 6, 0));
             l.setAlignmentX(LEFT_ALIGNMENT);
             return l;
@@ -3414,12 +3709,12 @@ public class QuickMemo {
                 page.setBorder(new EmptyBorder(16, 18, 16, 18));
 
                 // 디자인
-                JPanel styles = new JPanel(new GridLayout(1, 3, 8, 0));
+                JPanel styles = new JPanel(new GridLayout(0, 4, 8, 8));
                 styles.setOpaque(false);
-                styles.add(new StyleCard(Style.Simple, "심플", "깔끔한 기본"));
-                styles.add(new StyleCard(Style.Cute, "아기자기", "파스텔 · 테이프"));
-                styles.add(new StyleCard(Style.Christmas, "크리스마스", "트리 · 눈송이"));
-                page.add(section("디자인", styles));
+                for (Style s : Style.values()) styles.add(new StyleCard(s, s.label, s.desc));
+                Style season = Style.forSeason(LocalDate.now());
+                page.add(section("디자인", styles, row("계절에 맞춰 자동 변경", "계절마다 추천 디자인으로 (지금: " + season.label + ")",
+                        new ToggleSwitch(app.store.autoSeason(), on -> { app.setAutoSeason(on); rebuild(); }))));
 
                 // 화면
                 page.add(section("화면 모드", row("밝기", "메모 목록과 창의 밝기", new Segmented(new String[]{"밝게", "어둡게"}, dark() ? 1 : 0, i -> {
@@ -3553,12 +3848,15 @@ public class QuickMemo {
                     this.style = style;
                     this.name = name;
                     this.desc = desc;
-                    setPreferredSize(new Dimension(130, 128));
+                    setPreferredSize(new Dimension(96, 124));
+                    setToolTipText(name + " · " + desc);
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                     addMouseListener(new MouseAdapter() {
                         public void mouseClicked(MouseEvent e) {
-                            if (STYLE == style) return;
+                            boolean auto = app.store.autoSeason();
+                            if (STYLE == style && !auto) return;
                             app.store.set("uiStyle", style.name());
+                            if (auto) app.store.set("autoSeason", "false");   // 직접 고르면 자동 변경은 끔
                             app.setStyle(style);
                             rebuild();
                         }
@@ -3592,25 +3890,26 @@ public class QuickMemo {
                         g2.setColor(new Color(0x9A9A9A));
                         g2.fillRoundRect(px + 9, py + 22, 46, 4, 4, 4);
                         g2.fillRoundRect(px + 9, py + 32, 34, 4, 4, 4);
-                    } else if (style == Style.Christmas) {
-                        g2.setColor(new Color(0xFFEDED));
+                    } else if (style.decorated()) {                      // 계절: 대표 색 + 띠 장식 + 아이콘
+                        Object[] pal = Theme.palette(style)[style == Style.Summer || style == Style.Winter ? 4 : 2];
+                        g2.setColor(new Color((Integer) pal[1]));
                         g2.fillRoundRect(px, py, pw, ph, 16, 16);
-                        g2.setClip(new java.awt.geom.RoundRectangle2D.Float(px, py, pw, ph, 16, 16));
-                        g2.setColor(new Color(0xF5AFAF));
-                        g2.fillRect(px, py, pw, 13);
-                        g2.setColor(new Color(0x2E6B45));                  // 가랜드
-                        g2.setStroke(new BasicStroke(1.4f));
-                        g2.draw(new java.awt.geom.QuadCurve2D.Double(px, py + 12, px + pw / 2.0, py + 20, px + pw, py + 12));
-                        Color[] cs = {XMAS_RED, XMAS_GOLD, XMAS_GREEN, XMAS_RED};
-                        for (int k = 0; k < 4; k++) {
-                            g2.setColor(cs[k]);
-                            g2.fillOval(px + 9 + k * 17, py + 14 + (k == 1 || k == 2 ? 2 : 0), 7, 7);
-                        }
+                        Shape clip = new java.awt.geom.RoundRectangle2D.Float(px, py, pw, ph, 16, 16);
+                        g2.setClip(clip);
+                        double sc = .6;
+                        int bandH = 22;
+                        g2.setColor(new Color((Integer) pal[2]));
+                        g2.fillRect(px, py, pw, bandH);
+                        Graphics2D gd = (Graphics2D) g2.create();
+                        gd.translate(px, py);
+                        gd.scale(sc, sc);
+                        Deco.band(gd, style, Theme.Yellow, (int) (pw / sc) + 2, (int) (bandH / sc));
+                        gd.dispose();
                         g2.setClip(null);
-                        new Glyph("tree", 18).paintIcon(this, g2, px + pw - 24, py + ph - 22);
+                        new Glyph(style.icon, 18).paintIcon(this, g2, px + pw - 23, py + ph - 21);
                         g2.setColor(new Color(0xC9A99A));
-                        g2.fillRoundRect(px + 9, py + 30, 36, 4, 4, 4);
-                        g2.fillRoundRect(px + 9, py + 40, 26, 4, 4, 4);
+                        g2.fillRoundRect(px + 9, py + 30, 32, 4, 4, 4);
+                        g2.fillRoundRect(px + 9, py + 40, 22, 4, 4, 4);
                     } else {
                         g2.setColor(new Color(0xFFE7EF));
                         g2.fillRoundRect(px, py, pw, ph, 16, 16);
@@ -3636,6 +3935,16 @@ public class QuickMemo {
                     g2.setColor(sub());
                     fm = g2.getFontMetrics();
                     g2.drawString(desc, (w - fm.stringWidth(desc)) / 2, py + ph + 39);
+                    if (style == Style.forSeason(LocalDate.now())) {     // 지금 계절 추천 표시
+                        g2.setFont(BASE_FONT.deriveFont(Font.BOLD, 10f));
+                        fm = g2.getFontMetrics();
+                        String tag = "추천";
+                        int tw = fm.stringWidth(tag) + 10;
+                        g2.setColor(style.accent);
+                        g2.fillRoundRect(6, 6, tw, 16, 16, 16);
+                        g2.setColor(Color.WHITE);
+                        g2.drawString(tag, 11, 6 + (16 + fm.getAscent() - fm.getDescent()) / 2);
+                    }
                     if (sel) {                                           // 선택 표시
                         g2.setColor(accent());
                         g2.fillOval(w - 24, 8, 16, 16);
