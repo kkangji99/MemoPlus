@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.9";
+    static final String VERSION = "1.0.10";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -408,9 +408,9 @@ public class QuickMemo {
 
     // ===================================================================== 테마
     // ===================================================================== 디자인 스타일
-    /** 화면 스타일: 심플(기본, 원래 스티커 메모 느낌) / 아기자기(파스텔·둥근 모양·마스킹테이프) */
+    /** 화면 스타일: 심플(기본, 원래 스티커 메모 느낌) / 아기자기(파스텔·둥근 모양·마스킹테이프) / 크리스마스(아기자기 + 빨강·초록, 가랜드·눈송이) */
     enum Style {
-        Simple("심플"), Cute("아기자기");
+        Simple("심플"), Cute("아기자기"), Christmas("크리스마스");
 
         final String label;
 
@@ -423,7 +423,15 @@ public class QuickMemo {
 
     static volatile Style STYLE = Style.Simple;
 
-    static boolean cute() { return STYLE == Style.Cute; }
+    /** 둥근 모양·통통한 선 등 아기자기 계열 (크리스마스 포함) */
+    static boolean cute() { return STYLE == Style.Cute || STYLE == Style.Christmas; }
+
+    static boolean xmas() { return STYLE == Style.Christmas; }
+
+    static final Color XMAS_RED = new Color(0xD63A3A), XMAS_GREEN = new Color(0x2E8B57), XMAS_GOLD = new Color(0xE8B83A);
+
+    /** 스타일 포인트 색: 아기자기 분홍 / 크리스마스 빨강 */
+    static Color styleAccent() { return xmas() ? XMAS_RED : PINK; }
 
     /** 스타일을 바꾸면 모든 테마의 색이 그 스타일 팔레트로 바뀐다 */
     static void applyStyle(Style s) {
@@ -462,7 +470,26 @@ public class QuickMemo {
             useStyle(Style.Simple);
         }
 
+        /** 크리스마스 팔레트: 이름, 본문, 띠, 포인트 (Theme 순서와 같음) */
+        static final Object[][] XMAS = {
+            {"황금 종", 0xFFF6DD, 0xF7D98B, 0xC99A1E},
+            {"트리", 0xE7F4EA, 0xA9D8B6, 0x2E8B57},
+            {"산타", 0xFFEDED, 0xF5AFAF, 0xD63A3A},
+            {"겨울밤", 0xEFEAFA, 0xD2C5F0, 0x7C5CC4},
+            {"눈송이", 0xEBF6FD, 0xBFE2F6, 0x3C8DC9},
+            {"눈사람", 0xFAFAFA, 0xE3E7EA, 0x8A9399},
+            {"고요한 밤", 0x1F3A2E, 0x17301F, 0xF0B43C},
+        };
+
         void useStyle(Style s) {
+            if (s == Style.Christmas) {
+                Object[] x = XMAS[ordinal()];
+                label = (String) x[0];
+                body = new Color((Integer) x[1]);
+                header = new Color((Integer) x[2]);
+                accent = new Color((Integer) x[3]);
+                return;
+            }
             boolean c = s == Style.Cute;
             label = c ? cuteLabel : simpleLabel;
             body = new Color(c ? cuteBody : simpleBody);
@@ -475,7 +502,7 @@ public class QuickMemo {
         Color hover() { return dark ? new Color(255, 255, 255, 38) : cute() ? new Color(90, 70, 54, 26) : new Color(0, 0, 0, 26); }
         Color menuBg() { return dark ? (cute() ? new Color(0x2F2A3B) : new Color(0x2B2B2B)) : (cute() ? new Color(0xFFFDF8) : Color.WHITE); }
         Color menuFg() { return fg(); }
-        Color menuHover() { return dark ? new Color(255, 255, 255, 28) : cute() ? new Color(255, 160, 190, 50) : new Color(0, 0, 0, 18); }
+        Color menuHover() { return dark ? new Color(255, 255, 255, 28) : xmas() ? new Color(214, 58, 58, 40) : cute() ? new Color(255, 160, 190, 50) : new Color(0, 0, 0, 18); }
 
         static Theme parse(String s) {
             try { return valueOf(s); } catch (Exception e) { return Yellow; }
@@ -489,9 +516,9 @@ public class QuickMemo {
     /** 메모 창 모양. 기본은 사각. 각 모양은 외곽선과, 글이 들어갈 안쪽 여백(비율)을 가진다 */
     enum NoteShape {
         Square("사각", .00, .00, .00, .00, 220, 170),
-        Round("동그라미", .13, .13, .13, .13, 370, 370),
-        Heart("하트", .10, .10, .14, .30, 360, 340),
-        Star("별", .21, .21, .32, .14, 460, 440),
+        Round("동그라미", .13, .13, .13, .05, 340, 340),
+        Heart("하트", .10, .10, .14, .12, 360, 340),
+        Star("별", .21, .21, .32, .15, 440, 420),
         Cloud("구름", .08, .08, .25, .08, 300, 230),
         Bubble("말풍선", .00, .00, .00, .12, 240, 200);
 
@@ -1187,6 +1214,16 @@ public class QuickMemo {
                 e.printStackTrace();
             }
         }
+
+        /** 메모 파일을 지운다 (아무것도 쓰지 않은 메모를 남기지 않을 때) */
+        void remove(Note n) {
+            try { Files.deleteIfExists(notesDir.resolve(n.id + ".note")); } catch (IOException ignored) { }
+        }
+    }
+
+    /** 글도 그림도 없는 메모 */
+    static boolean isEmptyNote(Note n) {
+        return Markup.plain(n.text).isBlank() && Markup.mediaIds(n.text).isEmpty();
     }
 
     // ===================================================================== 공용 UI
@@ -1278,6 +1315,24 @@ public class QuickMemo {
                     g2.setColor(PINK);
                     g2.fill(h);
                 }
+                case "tree" -> {                                     // 크리스마스 트리: 3단 초록 + 금별 + 빨간 장식
+                    g2.setColor(new Color(0x8B5A2B));
+                    g2.fill(new java.awt.geom.Rectangle2D.Double(s * .44, s * .8, s * .12, s * .14));
+                    g2.setColor(XMAS_GREEN);
+                    for (double[] tier : new double[][]{{.16, .24, .5}, {.32, .16, .66}, {.5, .08, .84}}) {
+                        java.awt.geom.Path2D.Double tri = new java.awt.geom.Path2D.Double();
+                        tri.moveTo(s * .5, s * tier[0]);
+                        tri.lineTo(s * (.5 + tier[2] / 2 + .04), s * (tier[0] + .34 - tier[1] * .2));
+                        tri.lineTo(s * (.5 - tier[2] / 2 - .04), s * (tier[0] + .34 - tier[1] * .2));
+                        tri.closePath();
+                        g2.fill(tri);
+                    }
+                    g2.setColor(XMAS_RED);
+                    dot(g2, .4, .52, .045);
+                    dot(g2, .62, .68, .045);
+                    g2.setColor(XMAS_GOLD);
+                    g2.fill(NoteShape.Star.outline(s * .38, s * .02, s * .24, s * .22));
+                }
                 case "star", "starFilled" -> {
                     Shape st = NoteShape.Star.outline(s * .06, s * .04, s * .88, s * .88);
                     if (kind.equals("starFilled")) {
@@ -1310,7 +1365,7 @@ public class QuickMemo {
                         break;
                     }
                     line(g2, .5, .55, .5, .9);
-                    g2.setColor(PINK);
+                    g2.setColor(styleAccent());
                     g2.fill(new java.awt.geom.Ellipse2D.Double(s * .22, s * .08, s * .56, s * .5));
                     g2.setColor(new Color(255, 255, 255, 170));
                     g2.fill(new java.awt.geom.Ellipse2D.Double(s * .33, s * .17, s * .14, s * .12));
@@ -1634,6 +1689,8 @@ public class QuickMemo {
             }
             applyStyle(Style.parse(store.settings.getProperty("uiStyle", Style.Simple.name())));   // 기본은 심플
             notes.addAll(store.loadAll());
+            for (Note n : new ArrayList<>(notes))                   // 예전에 남은 빈 메모(닫힌 것) 정리
+                if (!n.open && !n.deleted() && isEmptyNote(n)) { notes.remove(n); store.remove(n); }
             list = new NotesListWindow(this);
 
             int opened = 0;
@@ -1807,7 +1864,12 @@ public class QuickMemo {
             NoteWindow w = windows.remove(n.id);
             if (w != null) { w.flush(); w.dispose(); }
             n.open = false;
-            store.save(n);
+            if (isEmptyNote(n)) {                                   // 아무것도 쓰지 않고 닫으면 남기지 않음
+                notes.remove(n);
+                store.remove(n);
+            } else {
+                store.save(n);
+            }
             list.refresh();
             checkExit();
         }
@@ -2338,6 +2400,47 @@ public class QuickMemo {
 
             Shape ring;
             String ringKey;
+            java.awt.geom.Area area;
+            String areaKey;
+
+            /** 아래가 좁은 모양(원·하트·별): 서식 줄을 그 높이의 모양 폭에 맞게 좁혀 두 줄로 감싼다 */
+            @Override
+            public void doLayout() {
+                NoteShape s = note.shape;
+                int side = 0;
+                if ((s == NoteShape.Round || s == NoteShape.Heart || s == NoteShape.Star) && getWidth() > 0) {
+                    String key = s + "/" + getWidth() + "x" + getHeight();
+                    if (!key.equals(areaKey)) {
+                        var b = box();
+                        area = new java.awt.geom.Area(s.outline(b.getX(), b.getY(), b.getWidth(), b.getHeight()));
+                        areaKey = key;
+                    }
+                    Insets in = getInsets();
+                    int inner = getWidth() - in.left - in.right;
+                    for (int pass = 0; pass < 3; pass++) {               // 줄 수가 바뀌면 높이도 바뀌므로 몇 번 맞춘다
+                        setBarSide(side);
+                        int barH = formatBar.getPreferredSize().height;
+                        int y1 = getHeight() - in.bottom, y0 = y1 - barH;
+                        int lo = 0, hi = Math.max(0, (inner - 4 * 38) / 2);     // 한 줄에 버튼 4개는 들어가게
+                        while (lo < hi) {
+                            int m = (lo + hi) / 2;
+                            if (area.contains(in.left + m, y0, inner - 2 * m, barH)) hi = m; else lo = m + 1;
+                        }
+                        if (lo == side) break;
+                        side = lo;
+                    }
+                }
+                setBarSide(side);
+                super.doLayout();
+            }
+
+            /** 같은 값이면 테두리를 다시 넣지 않는다 (setBorder 는 다시 배치를 불러 무한 반복이 됨) */
+            void setBarSide(int side) {
+                Insets cur = formatBar.getBorder() != null ? formatBar.getBorder().getBorderInsets(formatBar) : null;
+                if (cur != null && cur.left == side && cur.right == side) return;
+                if (cur == null && side == 0) return;
+                formatBar.setBorder(new EmptyBorder(0, side, 0, side));
+            }
 
             /** 모양 테두리 안팎 RING/2 px 띠: 여기에 마우스를 대면 크기 조절 */
             Shape edgeRing() {
@@ -2388,11 +2491,16 @@ public class QuickMemo {
                 int bandBottom = getInsets().top + HEADER_H - 2;
                 g2.setColor(t.header);
                 g2.fillRect(0, 0, getWidth(), bandBottom);
-                if (cute()) {
+                if (xmas()) {
+                    paintSnow(g2, t, bandBottom);
+                    paintGarland(g2, bandBottom);
+                } else if (cute()) {
                     // 색 띠 아래 바느질 점선
                     g2.setColor(new Color(255, 255, 255, t.dark ? 70 : 200));
                     g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{1f, 6f}, 0f));
                     g2.drawLine(0, bandBottom - 5, getWidth(), bandBottom - 5);
+                }
+                if (cute()) {
                     // 위쪽 반짝임
                     g2.setPaint(new GradientPaint(0, (float) b.getY(), new Color(255, 255, 255, t.dark ? 25 : 90), 0, (float) (b.getY() + b.getHeight() * .5), new Color(255, 255, 255, 0)));
                     g2.fill(sh);
@@ -2403,6 +2511,44 @@ public class QuickMemo {
                 g2.setStroke(new BasicStroke(1.3f));
                 g2.draw(sh);
                 g2.dispose();
+            }
+
+            /** 크리스마스: 본문에 은은한 눈송이 (메모마다 같은 자리) */
+            void paintSnow(Graphics2D g2, Theme t, int top) {
+                Random rnd = new Random(note.id.hashCode());
+                int w = getWidth(), h = getHeight(), n = Math.max(6, w * (h - top) / 9000);
+                Color c = t.dark ? new Color(255, 255, 255, 55) : new Color(t.accent.getRed(), t.accent.getGreen(), t.accent.getBlue(), 38);
+                g2.setColor(c);
+                g2.setStroke(new BasicStroke(1.3f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                for (int i = 0; i < n; i++) {
+                    double x = rnd.nextDouble() * w, y = top + 8 + rnd.nextDouble() * Math.max(1, h - top - 16), r = 4 + rnd.nextDouble() * 5;
+                    for (int k = 0; k < 3; k++) {
+                        double a = Math.PI / 3 * k + Math.PI / 6;
+                        g2.draw(new java.awt.geom.Line2D.Double(x - Math.cos(a) * r, y - Math.sin(a) * r, x + Math.cos(a) * r, y + Math.sin(a) * r));
+                    }
+                }
+            }
+
+            /** 크리스마스: 색 띠 아래로 늘어진 줄에 매달린 오너먼트 */
+            void paintGarland(Graphics2D g2, int bandBottom) {
+                int w = getWidth(), step = 34;
+                double y0 = bandBottom - 3, sag = 6;
+                java.awt.geom.Path2D.Double rope = new java.awt.geom.Path2D.Double();
+                rope.moveTo(0, y0);
+                for (int x = 0; x < w; x += step) rope.quadTo(x + step / 2.0, y0 + sag * 2, x + step, y0);
+                g2.setColor(new Color(0x2E6B45));
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g2.draw(rope);
+                Color[] cs = {XMAS_RED, XMAS_GOLD, XMAS_GREEN};
+                for (int i = 0, x = step / 2; x < w; i++, x += step) {
+                    double cx = x, cy = y0 + sag + 6, r = 5;
+                    g2.setColor(new Color(0xB8B8B8));
+                    g2.fill(new java.awt.geom.Rectangle2D.Double(cx - 2, cy - r - 3, 4, 3));
+                    g2.setColor(cs[i % 3]);
+                    g2.fill(new java.awt.geom.Ellipse2D.Double(cx - r, cy - r, 2 * r, 2 * r));
+                    g2.setColor(new Color(255, 255, 255, 170));
+                    g2.fill(new java.awt.geom.Ellipse2D.Double(cx - r * .5, cy - r * .55, r * .6, r * .5));
+                }
             }
         }
 
@@ -2963,7 +3109,7 @@ public class QuickMemo {
                 g2.setColor(getBackground());
                 int arc = cute() ? getHeight() : 8;                         // 아기자기: 알약 / 심플: 둥근 사각
                 g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, arc, arc);
-                Color line = cute() ? PINK : new Color(0x8A8A8A);
+                Color line = cute() ? styleAccent() : new Color(0x8A8A8A);
                 g2.setColor(isFocusOwner() ? line : new Color(line.getRed(), line.getGreen(), line.getBlue(), cute() ? 90 : 70));
                 g2.setStroke(new BasicStroke(cute() ? 1.5f : 1f));
                 g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 3, arc - 2, arc - 2);
@@ -3072,7 +3218,7 @@ public class QuickMemo {
 
         Color bg() {
             boolean d = app.store.darkMode();
-            return cute() ? (d ? new Color(0x2A2633) : CREAM) : (d ? new Color(0x202020) : new Color(0xF3F3F3));
+            return xmas() ? (d ? new Color(0x14261D) : new Color(0xFBF6EE)) : cute() ? (d ? new Color(0x2A2633) : CREAM) : (d ? new Color(0x202020) : new Color(0xF3F3F3));
         }
 
         Color fg() {
@@ -3085,14 +3231,14 @@ public class QuickMemo {
             getContentPane().setBackground(bg);
             for (Component c : List.of(scroll.getViewport(), (Component) scroll.getViewport().getView(), cards)) c.setBackground(bg);
             title.setForeground(fg);
-            title.setIcon(cute() ? new Glyph("heart", 20) : null);
+            title.setIcon(xmas() ? new Glyph("tree", 22) : cute() ? new Glyph("heart", 20) : null);
             for (FlatButton b : buttons) {
                 b.setForeground(fg);
                 b.setBackground(bg);
-                b.hoverColor = app.store.darkMode() ? new Color(255, 255, 255, 40) : cute() ? new Color(255, 160, 190, 60) : new Color(0, 0, 0, 28);
+                b.hoverColor = app.store.darkMode() ? new Color(255, 255, 255, 40) : xmas() ? new Color(214, 58, 58, 45) : cute() ? new Color(255, 160, 190, 60) : new Color(0, 0, 0, 28);
             }
             scroll.getVerticalScrollBar().setUI(new CuteScrollBarUI());
-            scroll.getVerticalScrollBar().putClientProperty("accent", cute() ? PINK : new Color(0xB0B0B0));
+            scroll.getVerticalScrollBar().putClientProperty("accent", cute() ? styleAccent() : new Color(0xB0B0B0));
             search.setBackground(app.store.darkMode() ? (cute() ? new Color(0x37323F) : new Color(0x2D2D2D)) : Color.WHITE);
             search.setForeground(fg);
             search.setCaretColor(fg);
@@ -3141,7 +3287,7 @@ public class QuickMemo {
             if (star) l.setIcon(new Glyph("starFilled", 14));
             l.setIconTextGap(6);
             l.setFont(BASE_FONT.deriveFont(Font.BOLD, 12f));
-            l.setForeground(cute() ? (app.store.darkMode() ? new Color(0xFFB0CC) : new Color(0xE07799))
+            l.setForeground(xmas() ? (app.store.darkMode() ? new Color(0xF28B8B) : new Color(0xC23434)) : cute() ? (app.store.darkMode() ? new Color(0xFFB0CC) : new Color(0xE07799))
                     : (app.store.darkMode() ? new Color(0xBBBBBB) : new Color(0x666666)));
             l.setBorder(new EmptyBorder(4, 2, 6, 0));
             l.setAlignmentX(LEFT_ALIGNMENT);
@@ -3163,14 +3309,14 @@ public class QuickMemo {
                 super(NotesListWindow.this, "설정", true);
                 setDefaultCloseOperation(DISPOSE_ON_CLOSE);
                 build();
-                setSize(420, 700);
+                setSize(480, 700);
                 setLocationRelativeTo(NotesListWindow.this);
                 NoteWindow.bind(getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), getRootPane().getActionMap(),
                         KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close", this::dispose);
             }
 
             boolean dark() { return app.store.darkMode(); }
-            Color accent() { return cute() ? PINK : dark() ? new Color(0x4CC2FF) : new Color(0x0067C0); }
+            Color accent() { return cute() ? styleAccent() : dark() ? new Color(0x4CC2FF) : new Color(0x0067C0); }
             Color pageBg() { return dark() ? new Color(0x202020) : new Color(0xF3F3F3); }
             Color cardBg() { return dark() ? new Color(0x2B2B2B) : Color.WHITE; }
             Color text() { return dark() ? new Color(0xF0F0F0) : new Color(0x1B1B1B); }
@@ -3184,10 +3330,11 @@ public class QuickMemo {
                 page.setBorder(new EmptyBorder(16, 18, 16, 18));
 
                 // 디자인
-                JPanel styles = new JPanel(new GridLayout(1, 2, 10, 0));
+                JPanel styles = new JPanel(new GridLayout(1, 3, 8, 0));
                 styles.setOpaque(false);
-                styles.add(new StyleCard(Style.Simple, "심플", "깔끔한 기본 디자인"));
-                styles.add(new StyleCard(Style.Cute, "아기자기", "파스텔 · 마스킹테이프"));
+                styles.add(new StyleCard(Style.Simple, "심플", "깔끔한 기본"));
+                styles.add(new StyleCard(Style.Cute, "아기자기", "파스텔 · 테이프"));
+                styles.add(new StyleCard(Style.Christmas, "크리스마스", "트리 · 눈송이"));
                 page.add(section("디자인", styles));
 
                 // 화면
@@ -3322,7 +3469,7 @@ public class QuickMemo {
                     this.style = style;
                     this.name = name;
                     this.desc = desc;
-                    setPreferredSize(new Dimension(170, 128));
+                    setPreferredSize(new Dimension(130, 128));
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                     addMouseListener(new MouseAdapter() {
                         public void mouseClicked(MouseEvent e) {
@@ -3361,6 +3508,25 @@ public class QuickMemo {
                         g2.setColor(new Color(0x9A9A9A));
                         g2.fillRoundRect(px + 9, py + 22, 46, 4, 4, 4);
                         g2.fillRoundRect(px + 9, py + 32, 34, 4, 4, 4);
+                    } else if (style == Style.Christmas) {
+                        g2.setColor(new Color(0xFFEDED));
+                        g2.fillRoundRect(px, py, pw, ph, 16, 16);
+                        g2.setClip(new java.awt.geom.RoundRectangle2D.Float(px, py, pw, ph, 16, 16));
+                        g2.setColor(new Color(0xF5AFAF));
+                        g2.fillRect(px, py, pw, 13);
+                        g2.setColor(new Color(0x2E6B45));                  // 가랜드
+                        g2.setStroke(new BasicStroke(1.4f));
+                        g2.draw(new java.awt.geom.QuadCurve2D.Double(px, py + 12, px + pw / 2.0, py + 20, px + pw, py + 12));
+                        Color[] cs = {XMAS_RED, XMAS_GOLD, XMAS_GREEN, XMAS_RED};
+                        for (int k = 0; k < 4; k++) {
+                            g2.setColor(cs[k]);
+                            g2.fillOval(px + 9 + k * 17, py + 14 + (k == 1 || k == 2 ? 2 : 0), 7, 7);
+                        }
+                        g2.setClip(null);
+                        new Glyph("tree", 18).paintIcon(this, g2, px + pw - 24, py + ph - 22);
+                        g2.setColor(new Color(0xC9A99A));
+                        g2.fillRoundRect(px + 9, py + 30, 36, 4, 4, 4);
+                        g2.fillRoundRect(px + 9, py + 40, 26, 4, 4, 4);
                     } else {
                         g2.setColor(new Color(0xFFE7EF));
                         g2.fillRoundRect(px, py, pw, ph, 16, 16);
@@ -3660,13 +3826,21 @@ public class QuickMemo {
                 // 위에 살짝 기울여 붙인 마스킹테이프
                 Shape tape = java.awt.geom.AffineTransform.getRotateInstance(-0.06, w / 2.0, 4)
                         .createTransformedShape(new java.awt.geom.Rectangle2D.Double(w / 2.0 - 30, -4, 60, 15));
-                g2.setColor(new Color(t.header.getRed(), t.header.getGreen(), t.header.getBlue(), 230));
+                g2.setColor(xmas() ? new Color(255, 255, 255, 240) : new Color(t.header.getRed(), t.header.getGreen(), t.header.getBlue(), 230));
                 g2.fill(tape);
+                if (xmas()) {                                            // 크리스마스: 지팡이사탕 줄무늬 테이프
+                    Shape clip = g2.getClip();
+                    g2.clip(tape);
+                    g2.setColor(XMAS_RED);
+                    g2.setStroke(new BasicStroke(4f));
+                    for (int sx = w / 2 - 50; sx < w / 2 + 50; sx += 10) g2.drawLine(sx, 16, sx + 16, -8);
+                    g2.setClip(clip);
+                }
                 g2.setColor(new Color(255, 255, 255, 110));
                 g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{2f, 3f}, 0f));
                 g2.draw(tape);
                 if (dragging) {                                          // 끌고 있는 카드 표시
-                    g2.setColor(PINK);
+                    g2.setColor(styleAccent());
                     g2.setStroke(new BasicStroke(2.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{6f, 5f}, 0f));
                     g2.drawRoundRect(3, 3, w - 7, h - 9, r, r);
                 }
