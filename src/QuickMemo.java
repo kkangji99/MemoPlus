@@ -32,13 +32,12 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.7";
+    static final String VERSION = "1.0.8";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
     public static void main(String[] args) throws Exception {
-        System.setProperty("awt.useSystemAAFontSettings", "on");
-        boolean dark = false;
+        boolean dark = false;                          // 글꼴 안티앨리어싱은 Windows(ClearType) 설정을 따른다: 회색조로 강제하면 맑은 고딕 획이 빠짐
         try (var r = Files.newBufferedReader(Store.dataDir().resolve("settings.properties"), StandardCharsets.UTF_8)) {
             Properties p = new Properties();
             p.load(r);
@@ -1923,10 +1922,13 @@ public class QuickMemo {
             pane = new JTextPane() {
                 @Override
                 protected void paintComponent(Graphics g) {
+                    // 반투명 창은 ClearType 을 못 쓰고 회색조로 그린다: 이때 맑은 고딕 획이 빠지지 않게
+                    ((Graphics2D) g).setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);
                     super.paintComponent(g);
                     if (getDocument().getLength() == 0) {
                         Graphics2D g2 = (Graphics2D) g.create();
                         g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                        g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
                         Color fg = getForeground();
                         g2.setColor(new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 110));
                         g2.setFont(getFont());
@@ -2925,6 +2927,7 @@ public class QuickMemo {
                 if (getText().isEmpty()) {
                     Graphics2D g3 = (Graphics2D) g.create();
                     g3.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                    g3.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
                     Color f = getForeground();
                     g3.setColor(new Color(f.getRed(), f.getGreen(), f.getBlue(), 110));
                     Insets in = getInsets();
@@ -3290,6 +3293,7 @@ public class QuickMemo {
                     Graphics2D g2 = (Graphics2D) g.create();
                     g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                     g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                    g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
                     boolean sel = STYLE == style;
                     int w = getWidth(), h = getHeight();
                     g2.setColor(dark() ? new Color(0x333333) : new Color(0xF7F7F7));
@@ -3373,6 +3377,7 @@ public class QuickMemo {
                     Graphics2D g2 = (Graphics2D) g.create();
                     g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                     g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                    g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
                     int w = getWidth(), h = getHeight(), seg = w / items.length;
                     g2.setColor(dark() ? new Color(0x3A3A3A) : new Color(0xEDEDED));
                     g2.fillRoundRect(0, 0, w, h, h, h);
