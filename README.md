@@ -4,7 +4,7 @@ Windows 스티커 메모를 분석해서 다시 만든 데스크톱 메모 프�
 
 ## 설치
 
-1. [Releases](https://github.com/kkangji99/QuickMemo/releases/latest)에서 `QuickMemo-x.y.z-win64.zip`을 받습니다.
+1. [Releases](https://github.com/kkangji99/QuickMemo/releases/latest)에서 `QuickMemo-x.y.z-windows-x64.zip`을 받습니다.
 2. 원하는 폴더에 압축을 풉니다. 바탕화면이나 문서 폴더처럼 **쓰기 권한이 있는 곳**에 풀어야 합니다(Program Files는 안 됨).
 3. `QuickMemo\QuickMemo.exe`를 실행합니다. 자바 런타임이 함께 들어 있어서 Java를 따로 설치할 필요가 없습니다.
 
@@ -40,7 +40,9 @@ run.bat            :: jar 실행 (자동 업데이트 꺼짐)
 ## 릴리스
 
 1. `src\QuickMemo.java`에서 `VERSION`을 올립니다(예: `1.0.1`).
-2. `release.ps1`을 실행하면 `dist\QuickMemo-<버전>-win64.zip`이 만들어집니다.
+2. `release.ps1`을 실행하면 `dist\QuickMemo-<버전>-windows-x64.zip`이 만들어집니다.
 3. GitHub에서 태그가 `v<버전>`인 릴리스를 만들고 zip을 첨부합니다. gh CLI가 있으면 `release.ps1 -Publish`로 한 번에 할 수 있습니다.
 
-릴리스의 zip 이름은 반드시 `-win64.zip`으로 끝나야 자동 업데이트가 찾습니다.
+릴리스의 zip 이름은 반드시 `-windows-x64.zip`으로 끝나야 자동 업데이트가 찾습니다.
+
+> 1.0.0 빌드는 업데이트 적용 버그가 있어 자동 업데이트되지 않습니다. 1.0.0을 쓰고 있다면 최신 릴리스를 받아 다시 설치해 주세요.

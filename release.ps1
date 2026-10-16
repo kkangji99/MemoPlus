@@ -35,7 +35,8 @@ jpackage --type app-image --name QuickMemo --app-version $Version `
 if ($LASTEXITCODE) { throw 'jpackage failed' }
 
 New-Item -ItemType Directory dist -Force | Out-Null
-$zip = "dist\QuickMemo-$Version-win64.zip"
+# asset name must end with -windows-x64.zip (the updater looks for it; 1.0.0 builds look for -win64.zip and are skipped on purpose)
+$zip = "dist\QuickMemo-$Version-windows-x64.zip"
 Remove-Item $zip -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 [IO.Compression.ZipFile]::CreateFromDirectory("$PWD\build\image\QuickMemo", "$PWD\$zip", [IO.Compression.CompressionLevel]::Optimal, $true)

@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.1";
+    static final String VERSION = "1.0.2";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -48,13 +48,66 @@ public class QuickMemo {
     // ===================================================================== 자동 업데이트
     /**
      * exe(jpackage app-image)로 실행될 때만 동작. 시작 시 GitHub 최신 릴리스를 확인하고,
-     * 더 새 버전이면 QuickMemo-x.y.z-win64.zip 을 받아 설치 폴더를 교체한 뒤 다시 실행한다.
+     * 더 새 버전이면 QuickMemo-x.y.z-windows-x64.zip 을 받아 설치 폴더 내용을 교체한 뒤 다시 실행한다.
      * 메모 데이터는 %APPDATA%\QuickMemo 에 있으므로 교체 대상이 아니다.
+     * (1.0.0 의 업데이터는 폴더 교체 버그가 있어 -win64.zip 만 찾는다. 새 이름으로 올려 예전 빌드가 반복 시도하지 않게 함)
      */
     static final class Updater {
         static final String API = Optional.ofNullable(System.getenv("QUICKMEMO_UPDATE_API")).orElse("https://api.github.com");
         static final Pattern TAG = Pattern.compile("\"tag_name\"\\s*:\\s*\"v?([^\"]+)\"");
-        static final Pattern ZIP = Pattern.compile("\"browser_download_url\"\\s*:\\s*\"([^\"]+-win64\\.zip)\"");
+        static final Pattern ZIP = Pattern.compile("\"browser_download_url\"\\s*:\\s*\"([^\"]+-windows-x64\\.zip)\"");
+        /** 업데이트에 실패한 뒤 다시 시도하기까지 기다리는 시간 */
+        static final long RETRY_AFTER_MS = 60 * 60 * 1000L;
+
+        /** 마지막 업데이트 시도 기록: 목표 버전과 시각 */
+        static Path attemptFile() { return Store.dataDir().resolve("update-attempt.properties"); }
+
+        static Properties readAttempt() {
+            Properties p = new Properties();
+            try (var r = Files.newBufferedReader(attemptFile(), StandardCharsets.UTF_8)) {
+                p.load(r);
+                return p;
+            } catch (IOException e) {
+                return null;
+            }
+        }
+
+        static void writeAttempt(Properties p) {
+            try {
+                Files.createDirectories(attemptFile().getParent());
+                try (var w = Files.newBufferedWriter(attemptFile(), StandardCharsets.UTF_8)) { p.store(w, null); }
+            } catch (IOException ignored) { }
+        }
+
+        /**
+         * 직전 시도 결과 확인. 목표 버전에 도달했으면 기록을 지우고 true,
+         * 실패한 지 얼마 안 됐으면 (한 번만 안내하고) false — 실패한 업데이트를 계속 반복하지 않기 위함.
+         */
+        static boolean mayAttempt() {
+            Properties p = readAttempt();
+            if (p == null) return true;
+            String target = p.getProperty("target", "0");
+            long at = Long.parseLong(p.getProperty("time", "0"));
+            if (compare(VERSION, target) >= 0) {
+                log("updated to " + VERSION);
+                try { Files.deleteIfExists(attemptFile()); } catch (IOException ignored) { }
+                return true;
+            }
+            if (System.currentTimeMillis() - at >= RETRY_AFTER_MS) return true;
+            log("previous update to " + target + " failed, retry after 1 hour");
+            if (!"1".equals(p.getProperty("notified"))) {
+                p.setProperty("notified", "1");
+                writeAttempt(p);
+                try {
+                    SwingUtilities.invokeAndWait(() -> JOptionPane.showMessageDialog(null,
+                            "QuickMemo " + target + " 업데이트를 적용하지 못해 현재 버전(" + VERSION + ")으로 실행합니다.\n"
+                                    + "QuickMemo 폴더를 연 탐색기 창이 있으면 닫아 주세요. 1시간 뒤 실행할 때 다시 시도합니다.\n"
+                                    + "자세한 내용: " + Store.dataDir().resolve("update.log"),
+                            "QuickMemo 업데이트", JOptionPane.WARNING_MESSAGE));
+                } catch (Exception ignored) { }
+            }
+            return false;
+        }
 
         record Release(String version, String zipUrl) {}
 
@@ -70,6 +123,7 @@ public class QuickMemo {
             Path dir = installDir();
             if (dir == null || UPDATE_REPO.isBlank()) return false;
             try {
+                if (!mayAttempt()) return false;
                 Release r = latest();
                 log("installed " + VERSION + " at " + dir + ", latest " + (r == null ? "none" : r.version()));
                 if (r == null || compare(r.version(), VERSION) <= 0) return false;
@@ -161,10 +215,19 @@ public class QuickMemo {
                 if (newApp == null) throw new IOException("받은 파일에 QuickMemo.exe 가 없습니다.");
                 Path script = Files.createTempFile("QuickMemo-update-", ".ps1");
                 Files.writeString(script, SCRIPT, StandardCharsets.UTF_8);
+                Properties attempt = new Properties();
+                attempt.setProperty("target", r.version());
+                attempt.setProperty("from", VERSION);
+                attempt.setProperty("time", String.valueOf(System.currentTimeMillis()));
+                writeAttempt(attempt);
+                log("applying " + VERSION + " -> " + r.version());
+                // 스크립트의 작업 폴더가 설치 폴더 안이면 그 폴더를 붙잡아 교체가 실패하므로 임시 폴더에서 실행
                 new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
                         "-File", script.toString(),
                         "-OldPid", String.valueOf(ProcessHandle.current().pid()),
-                        "-Src", newApp.toString(), "-Dst", dir.toString(), "-Staging", staging.toString())
+                        "-Src", newApp.toString(), "-Dst", dir.toString(), "-Staging", staging.toString(),
+                        "-Log", Store.dataDir().resolve("update.log").toString())
+                        .directory(script.getParent().toFile())
                         .start();
                 System.exit(0);
                 return true;
@@ -223,24 +286,44 @@ public class QuickMemo {
             }
         }
 
-        /** 앱 종료를 기다렸다가 설치 폴더를 새 버전으로 바꾸고 다시 실행 (실패하면 원래 폴더 복구) */
+        /**
+         * 앱 종료를 기다렸다가 설치 폴더의 "내용"을 새 버전으로 바꾸고 다시 실행.
+         * 폴더 자체를 옮기지 않으므로 탐색기가 그 폴더를 열고 있어도 된다. 실패하면 옮긴 것을 되돌린다.
+         */
         static final String SCRIPT = String.join("\r\n",
-                "param([int]$OldPid, [string]$Src, [string]$Dst, [string]$Staging)",
+                "param([int]$OldPid, [string]$Src, [string]$Dst, [string]$Staging, [string]$Log)",
+                "function Log($m) { try { Add-Content -LiteralPath $Log -Value ((Get-Date -Format s) + ' [updater] ' + $m) -Encoding UTF8 } catch {} }",
                 "try { Wait-Process -Id $OldPid -Timeout 60 -ErrorAction SilentlyContinue } catch {}",
                 "Start-Sleep -Milliseconds 500",
                 "$bak = \"$Dst.old\"",
-                "if (Test-Path -LiteralPath $bak) { Remove-Item -LiteralPath $bak -Recurse -Force -ErrorAction SilentlyContinue }",
-                "$ok = $false",
-                "for ($i = 0; $i -lt 15 -and -not $ok; $i++) {",
-                "  try { Move-Item -LiteralPath $Dst -Destination $bak -ErrorAction Stop; $ok = $true } catch { Start-Sleep -Seconds 1 }",
+                "Remove-Item -LiteralPath $bak -Recurse -Force -ErrorAction SilentlyContinue",
+                "New-Item -ItemType Directory -Path $bak -Force | Out-Null",
+                "$moved = @()",
+                "$ok = $true",
+                "foreach ($item in @(Get-ChildItem -LiteralPath $Dst -Force)) {",
+                "  $done = $false",
+                "  for ($i = 0; $i -lt 10 -and -not $done; $i++) {",
+                "    try { Move-Item -LiteralPath $item.FullName -Destination $bak -ErrorAction Stop; $done = $true } catch { Start-Sleep -Milliseconds 700 }",
+                "  }",
+                "  if (-not $done) { $ok = $false; Log \"cannot move $($item.Name) (in use)\"; break }",
+                "  $moved += $item.Name",
                 "}",
                 "if ($ok) {",
-                "  try { Move-Item -LiteralPath $Src -Destination $Dst -ErrorAction Stop }",
-                "  catch { Move-Item -LiteralPath $bak -Destination $Dst; $ok = $false }",
+                "  try {",
+                "    foreach ($n in @(Get-ChildItem -LiteralPath $Src -Force)) { Move-Item -LiteralPath $n.FullName -Destination $Dst -ErrorAction Stop }",
+                "    Log 'swapped to new version'",
+                "  } catch {",
+                "    $ok = $false; Log \"install failed: $_\"",
+                "    Get-ChildItem -LiteralPath $Dst -Force | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue",
+                "  }",
                 "}",
-                "Start-Process -FilePath (Join-Path $Dst 'QuickMemo.exe')",
-                "if ($ok) { Remove-Item -LiteralPath $bak -Recurse -Force -ErrorAction SilentlyContinue }",
-                "if (Test-Path -LiteralPath $Staging) { Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue }",
+                "if (-not $ok) {",
+                "  foreach ($n in $moved) { Move-Item -LiteralPath (Join-Path $bak $n) -Destination $Dst -ErrorAction SilentlyContinue }",
+                "  Log 'kept previous version'",
+                "}",
+                "Start-Process -FilePath (Join-Path $Dst 'QuickMemo.exe') -WorkingDirectory $Dst",
+                "if ($ok -or -not @(Get-ChildItem -LiteralPath $bak -Force)) { Remove-Item -LiteralPath $bak -Recurse -Force -ErrorAction SilentlyContinue }",
+                "Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue",
                 "Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
                 "");
 
