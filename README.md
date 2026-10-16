@@ -1,0 +1,41 @@
+# QuickMemo
+
+Windows 스티커 메모를 분석해서 다시 만든 데스크톱 메모 프로그램입니다. Java Swing 파일 하나로 되어 있습니다.
+
+## 설치
+
+1. [Releases](https://github.com/kkangji99/QuickMemo/releases/latest)에서 `QuickMemo-x.y.z-win64.zip`을 받습니다.
+2. 원하는 폴더에 압축을 풉니다. 바탕화면이나 문서 폴더처럼 **쓰기 권한이 있는 곳**에 풀어야 합니다(Program Files는 안 됨).
+3. `QuickMemo\QuickMemo.exe`를 실행합니다. 자바 런타임이 함께 들어 있어서 Java를 따로 설치할 필요가 없습니다.
+
+## 자동 업데이트
+
+프로그램을 실행하면 이 저장소의 최신 릴리스를 확인합니다. 더 새 버전이 있으면 내려받아 설치 폴더를 바꾼 뒤 다시 실행합니다.
+
+- 메모는 `%APPDATA%\QuickMemo`에 저장되므로 업데이트해도 그대로 남습니다.
+- 네트워크가 없거나 실패하면 지금 버전으로 그냥 실행합니다. 기록은 `%APPDATA%\QuickMemo\update.log`에 남습니다.
+
+## 기능
+
+- 메모 창 여러 개, 색 7가지, 항상 위에 표시, 창 위치·크기 기억
+- 굵게(Ctrl+B), 기울임(Ctrl+I), 밑줄(Ctrl+U), 취소선(Ctrl+T), 글머리 기호(Ctrl+Shift+L)
+- 할 일 목록(Ctrl+Shift+C): 체크하면 취소선이 그어지고 목록 맨 아래로 이동
+- 이미지 붙여넣기(Ctrl+V), 파일 끌어놓기, 이미지 버튼
+- 메모 목록(검색, 썸네일), 밝게/어둡게 모드, 삭제 확인
+
+## 개발
+
+JDK 21 이상이 필요합니다.
+
+```bat
+build.bat          :: QuickMemo.jar 빌드
+run.bat            :: jar 실행 (자동 업데이트 꺼짐)
+```
+
+## 릴리스
+
+1. `src\QuickMemo.java`에서 `VERSION`을 올립니다(예: `1.0.1`).
+2. `release.ps1`을 실행하면 `dist\QuickMemo-<버전>-win64.zip`이 만들어집니다.
+3. GitHub에서 태그가 `v<버전>`인 릴리스를 만들고 zip을 첨부합니다. gh CLI가 있으면 `release.ps1 -Publish`로 한 번에 할 수 있습니다.
+
+릴리스의 zip 이름은 반드시 `-win64.zip`으로 끝나야 자동 업데이트가 찾습니다.
