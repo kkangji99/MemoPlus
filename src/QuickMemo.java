@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.2";
+    static final String VERSION = "1.0.3";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -372,32 +372,34 @@ public class QuickMemo {
     }
 
     // ===================================================================== 테마
+    /** 파스텔 테마. 이름(Yellow 등)은 저장 파일·원본 스티커 메모와 호환되도록 유지 */
     enum Theme {
-        Yellow("노랑", 0xFFF7D1, 0xFFF2AB, false),
-        Green("초록", 0xE4F9E0, 0xCBF1C4, false),
-        Pink("분홍", 0xFFE4F1, 0xFFCCE5, false),
-        Purple("보라", 0xF2E6FF, 0xE7CFFF, false),
-        Blue("파랑", 0xE2F1FF, 0xCDE9FF, false),
-        Gray("회색", 0xF3F2F1, 0xE1DFDD, false),
-        Charcoal("차콜", 0x5A5A5A, 0x454545, true);
+        Yellow("레몬", 0xFFF6CC, 0xFFE58F, 0xF2B300, false),
+        Green("민트", 0xE3F7EC, 0xBDEBD3, 0x35B985, false),
+        Pink("딸기우유", 0xFFE7EF, 0xFFC7DA, 0xFF7FA8, false),
+        Purple("라벤더", 0xF0E8FF, 0xDACBFF, 0x9C7BEA, false),
+        Blue("하늘", 0xE3F2FF, 0xC2E3FF, 0x4EA6EE, false),
+        Gray("구름", 0xF5F2EF, 0xE5DED7, 0xA89584, false),
+        Charcoal("밤하늘", 0x4A445C, 0x3A344B, 0xFFB0CC, true);
 
         final String label;
-        final Color body, header;
+        final Color body, header, accent;
         final boolean dark;
 
-        Theme(String label, int body, int header, boolean dark) {
+        Theme(String label, int body, int header, int accent, boolean dark) {
             this.label = label;
             this.body = new Color(body);
             this.header = new Color(header);
+            this.accent = new Color(accent);
             this.dark = dark;
         }
 
-        Color fg() { return dark ? new Color(0xF5F5F5) : new Color(0x1F1F1F); }
-        Color hover() { return dark ? new Color(255, 255, 255, 40) : new Color(0, 0, 0, 28); }
-        /** 메뉴 패널은 메모 색과 구분되는 중립색 */
-        Color menuBg() { return dark ? new Color(0x2B2B2B) : new Color(0xFAFAFA); }
-        Color menuFg() { return dark ? new Color(0xF5F5F5) : new Color(0x1F1F1F); }
-        Color menuHover() { return dark ? new Color(255, 255, 255, 30) : new Color(0, 0, 0, 18); }
+        /** 글자색: 검정 대신 부드러운 갈색 / 밤하늘은 분홍빛 흰색 */
+        Color fg() { return dark ? new Color(0xFFF4F8) : new Color(0x5A4636); }
+        Color hover() { return dark ? new Color(255, 255, 255, 38) : new Color(90, 70, 54, 26); }
+        Color menuBg() { return dark ? new Color(0x2F2A3B) : new Color(0xFFFDF8); }
+        Color menuFg() { return dark ? new Color(0xFFF4F8) : new Color(0x5A4636); }
+        Color menuHover() { return dark ? new Color(255, 255, 255, 28) : new Color(255, 160, 190, 50); }
 
         static Theme parse(String s) {
             try { return valueOf(s); } catch (Exception e) { return Yellow; }
@@ -405,6 +407,94 @@ public class QuickMemo {
     }
 
     static final Font BASE_FONT = new Font("Malgun Gothic", Font.PLAIN, 14);
+    static final Color PINK = new Color(0xFF8FB1), CREAM = new Color(0xFFF9F0);
+
+    // ===================================================================== 스티커 모양
+    /** 메모 창 모양. 기본은 사각. 각 모양은 외곽선과, 글이 들어갈 안쪽 여백(비율)을 가진다 */
+    enum NoteShape {
+        Square("사각", .00, .00, .00, .00, 220, 170),
+        Round("동그라미", .15, .15, .15, .13, 300, 300),
+        Heart("하트", .14, .14, .14, .27, 360, 340),
+        Star("별", .23, .23, .31, .21, 420, 400),
+        Cloud("구름", .08, .08, .25, .08, 300, 230),
+        Bubble("말풍선", .00, .00, .00, .12, 240, 200);
+
+        final String label;
+        final double left, right, top, bottom;          // 글 영역 여백 (모양 크기 대비 비율)
+        final int minW, minH;
+
+        NoteShape(String label, double left, double right, double top, double bottom, int minW, int minH) {
+            this.label = label;
+            this.left = left;
+            this.right = right;
+            this.top = top;
+            this.bottom = bottom;
+            this.minW = minW;
+            this.minH = minH;
+        }
+
+        static NoteShape parse(String s) {
+            try { return valueOf(s); } catch (Exception e) { return Square; }
+        }
+
+        /** (x, y) 에서 w×h 크기의 외곽선 */
+        Shape outline(double x, double y, double w, double h) {
+            java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
+            switch (this) {
+                case Square -> {
+                    double arc = Math.min(22, Math.min(w, h) * .25);     // 작은 칩에서도 사각으로 보이게
+                    return new java.awt.geom.RoundRectangle2D.Double(x, y, w, h, arc, arc);
+                }
+                case Round -> { return new java.awt.geom.Ellipse2D.Double(x, y, w, h); }
+                case Heart -> {
+                    p.moveTo(.50, .97);
+                    p.curveTo(.22, .78, .00, .58, .01, .34);
+                    p.curveTo(.02, .13, .19, .02, .34, .03);
+                    p.curveTo(.43, .04, .48, .10, .50, .17);
+                    p.curveTo(.52, .10, .57, .04, .66, .03);
+                    p.curveTo(.81, .02, .98, .13, .99, .34);
+                    p.curveTo(1.0, .58, .78, .78, .50, .97);
+                    p.closePath();
+                }
+                case Star -> {                                       // 통통하고 끝이 둥근 별
+                    double cx = .5, cy = .54, ro = .5, ri = .5 * .58;
+                    double[][] pts = new double[10][];
+                    for (int k = 0; k < 10; k++) {
+                        double r = k % 2 == 0 ? ro : ri, a = -Math.PI / 2 + k * Math.PI / 5;
+                        pts[k] = new double[]{cx + Math.cos(a) * r, cy + Math.sin(a) * r};
+                    }
+                    for (int k = 0; k < 10; k++) {                   // 꼭짓점을 곡선으로 둥글게
+                        double[] prev = pts[(k + 9) % 10], cur = pts[k], next = pts[(k + 1) % 10];
+                        double t = k % 2 == 0 ? .18 : .10;
+                        double ax = cur[0] + (prev[0] - cur[0]) * t, ay = cur[1] + (prev[1] - cur[1]) * t;
+                        double bx = cur[0] + (next[0] - cur[0]) * t, by = cur[1] + (next[1] - cur[1]) * t;
+                        if (k == 0) p.moveTo(ax, ay); else p.lineTo(ax, ay);
+                        p.quadTo(cur[0], cur[1], bx, by);
+                    }
+                    p.closePath();
+                }
+                case Cloud -> {
+                    java.awt.geom.Area a = new java.awt.geom.Area(new java.awt.geom.RoundRectangle2D.Double(.02, .34, .96, .62, .34, .34));
+                    a.add(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(.06, .18, .38, .40)));
+                    a.add(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(.28, .00, .46, .50)));
+                    a.add(new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(.58, .14, .38, .40)));
+                    p.append(a, false);
+                }
+                case Bubble -> {
+                    java.awt.geom.Area a = new java.awt.geom.Area(new java.awt.geom.RoundRectangle2D.Double(0, 0, 1, .88, .16, .16));
+                    java.awt.geom.Path2D.Double tail = new java.awt.geom.Path2D.Double();
+                    tail.moveTo(.18, .84);
+                    tail.quadTo(.16, .95, .08, 1.0);
+                    tail.quadTo(.24, .98, .34, .86);
+                    tail.closePath();
+                    a.add(new java.awt.geom.Area(tail));
+                    p.append(a, false);
+                }
+            }
+            return java.awt.geom.AffineTransform.getTranslateInstance(x, y)
+                    .createTransformedShape(java.awt.geom.AffineTransform.getScaleInstance(w, h).createTransformedShape(p));
+        }
+    }
 
     // ===================================================================== 시간 (.NET Ticks, 원본과 동일)
     static final long TICKS_EPOCH = 621355968000000000L;
@@ -417,6 +507,7 @@ public class QuickMemo {
     static final class Note {
         String id = UUID.randomUUID().toString();
         Theme theme = Theme.Yellow;
+        NoteShape shape = NoteShape.Square;
         String text = "";              // 문단 ID + 서식 토큰 마크업
         boolean open;
         boolean onTop;
@@ -965,6 +1056,7 @@ public class QuickMemo {
                     case "DeletedAt" -> n.deletedAt = v.isEmpty() ? null : Long.parseLong(v);
                     case "ImportedFrom" -> n.importedFrom = v.isEmpty() ? null : v;
                     case "Favorite" -> n.favorite = "1".equals(v);
+                    case "Shape" -> n.shape = NoteShape.parse(v);
                     case "Order" -> n.order = v.isEmpty() ? null : Long.parseLong(v);
                     case "WindowPosition" -> {
                         Matcher m = POS.matcher(v);
@@ -994,6 +1086,7 @@ public class QuickMemo {
             sb.append("DeletedAt=").append(n.deletedAt == null ? "" : n.deletedAt).append('\n');
             if (n.importedFrom != null) sb.append("ImportedFrom=").append(n.importedFrom).append('\n');
             if (n.favorite) sb.append("Favorite=1\n");
+            if (n.shape != NoteShape.Square) sb.append("Shape=").append(n.shape.name()).append('\n');
             if (n.order != null) sb.append("Order=").append(n.order).append('\n');
             sb.append('\n').append(n.text);
 
@@ -1031,13 +1124,13 @@ public class QuickMemo {
 
         @Override
         protected void paintComponent(Graphics g) {
-            if (active || getModel().isRollover()) {
+            if (active || getModel().isRollover()) {               // 몽글몽글한 알약 모양 강조
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(active ? hoverColor.darker() : hoverColor);
-                if (active) g2.setColor(new Color(hoverColor.getRed(), hoverColor.getGreen(), hoverColor.getBlue(),
-                        Math.min(255, hoverColor.getAlpha() * 2)));
-                g2.fillRoundRect(1, 1, getWidth() - 2, getHeight() - 2, 6, 6);
+                g2.setColor(active ? new Color(hoverColor.getRed(), hoverColor.getGreen(), hoverColor.getBlue(),
+                        Math.min(255, hoverColor.getAlpha() * 2)) : hoverColor);
+                int arc = Math.min(getHeight() - 2, 16);
+                g2.fillRoundRect(1, 1, getWidth() - 2, getHeight() - 2, arc, arc);
                 g2.dispose();
             }
             super.paintComponent(g);
@@ -1061,64 +1154,80 @@ public class QuickMemo {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
-            g2.setColor(c != null ? c.getForeground() : Color.DARK_GRAY);
+            Color fg = c != null ? c.getForeground() : Color.DARK_GRAY;
+            g2.setColor(fg);
             g2.translate(x, y);
             float s = size;
-            g2.setStroke(new BasicStroke(Math.max(1.4f, s / 11f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+            // 통통하고 끝이 둥근 선 = 아기자기한 느낌
+            g2.setStroke(new BasicStroke(Math.max(1.6f, s / 8f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
             switch (kind) {
-                case "plus" -> { line(g2, .2, .5, .8, .5); line(g2, .5, .2, .5, .8); }
-                case "close" -> { line(g2, .27, .27, .73, .73); line(g2, .73, .27, .27, .73); }
-                case "more" -> { for (double cx : new double[]{.2, .5, .8}) dot(g2, cx, .5, .08); }
-                case "list" -> { for (double cy : new double[]{.3, .5, .7}) line(g2, .2, cy, .8, cy); }
+                case "plus" -> { line(g2, .24, .5, .76, .5); line(g2, .5, .24, .5, .76); }
+                case "close" -> { line(g2, .3, .3, .7, .7); line(g2, .7, .3, .3, .7); }
+                case "more" -> { for (double cx : new double[]{.22, .5, .78}) dot(g2, cx, .52, .095); }
+                case "list" -> {
+                    for (double cy : new double[]{.3, .52, .74}) { dot(g2, .2, cy, .075); line(g2, .38, cy, .82, cy); }
+                }
                 case "bullets" -> {
-                    for (double cy : new double[]{.28, .5, .72}) { dot(g2, .2, cy, .07); line(g2, .38, cy, .84, cy); }
+                    for (double cy : new double[]{.28, .5, .72}) { dot(g2, .2, cy, .085); line(g2, .4, cy, .84, cy); }
+                }
+                case "search" -> {
+                    g2.draw(new java.awt.geom.Ellipse2D.Double(s * .14, s * .14, s * .5, s * .5));
+                    line(g2, .58, .58, .84, .84);
+                }
+                case "heart" -> {
+                    Shape h = NoteShape.Heart.outline(s * .1, s * .14, s * .8, s * .74);
+                    g2.setColor(PINK);
+                    g2.fill(h);
                 }
                 case "star", "starFilled" -> {
-                    java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
-                    for (int k = 0; k < 10; k++) {
-                        double r = (k % 2 == 0 ? .44 : .19) * s, a = -Math.PI / 2 + k * Math.PI / 5;
-                        double px = s * .5 + Math.cos(a) * r, py = s * .54 + Math.sin(a) * r;
-                        if (k == 0) p.moveTo(px, py); else p.lineTo(px, py);
-                    }
-                    p.closePath();
+                    Shape st = NoteShape.Star.outline(s * .06, s * .04, s * .88, s * .88);
                     if (kind.equals("starFilled")) {
-                        g2.setColor(new Color(0xF2B600));
-                        g2.fill(p);
-                        g2.setColor(new Color(0xC99700));
-                        g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                        g2.setColor(new Color(0xFFCB45));
+                        g2.fill(st);
+                        g2.setColor(new Color(0xF0A800));
+                        g2.setStroke(new BasicStroke(Math.max(1.2f, s / 14f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                     }
-                    g2.draw(p);
+                    g2.draw(st);
                 }
                 case "checklist" -> {
-                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .1, s * .14, s * .28, s * .28, s * .08, s * .08));
-                    poly(g2, new double[]{.16, .23, .34}, new double[]{.28, .35, .2});
-                    line(g2, .5, .28, .9, .28);
-                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .1, s * .58, s * .28, s * .28, s * .08, s * .08));
-                    line(g2, .5, .72, .9, .72);
+                    double r = s * .12;
+                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .08, s * .12, s * .3, s * .3, r, r));
+                    poly(g2, new double[]{.15, .22, .33}, new double[]{.27, .34, .2});
+                    line(g2, .52, .27, .88, .27);
+                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .08, s * .58, s * .3, s * .3, r, r));
+                    line(g2, .52, .73, .88, .73);
                 }
-                case "trash" -> {
-                    line(g2, .18, .26, .82, .26);
-                    line(g2, .4, .14, .6, .14);
-                    poly(g2, new double[]{.27, .32, .68, .73}, new double[]{.26, .86, .86, .26});
-                    line(g2, .43, .42, .43, .72);
-                    line(g2, .57, .42, .57, .72);
+                case "trash" -> {                                    // 뚜껑 손잡이가 동그란 휴지통
+                    line(g2, .2, .28, .8, .28);
+                    g2.draw(new java.awt.geom.Ellipse2D.Double(s * .42, s * .1, s * .16, s * .14));
+                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .27, s * .28, s * .46, s * .6, s * .18, s * .18));
+                    line(g2, .43, .45, .43, .7);
+                    line(g2, .57, .45, .57, .7);
                 }
-                case "pin" -> {
-                    poly(g2, new double[]{.38, .62, .62, .72, .28, .38}, new double[]{.14, .14, .48, .62, .62, .48});
-                    line(g2, .5, .62, .5, .88);
+                case "pin" -> {                                      // 분홍 머리 압정
+                    line(g2, .5, .55, .5, .9);
+                    g2.setColor(PINK);
+                    g2.fill(new java.awt.geom.Ellipse2D.Double(s * .22, s * .08, s * .56, s * .5));
+                    g2.setColor(new Color(255, 255, 255, 170));
+                    g2.fill(new java.awt.geom.Ellipse2D.Double(s * .33, s * .17, s * .14, s * .12));
                 }
-                case "gear" -> {
-                    for (int k = 0; k < 8; k++) {
-                        double a = Math.PI / 4 * k;
-                        line(g2, .5 + Math.cos(a) * .28, .5 + Math.sin(a) * .28, .5 + Math.cos(a) * .42, .5 + Math.sin(a) * .42);
+                case "gear" -> {                                     // 꽃잎 모양 톱니
+                    for (int k = 0; k < 6; k++) {
+                        double a = Math.PI / 3 * k;
+                        double px = .5 + Math.cos(a) * .27, py = .5 + Math.sin(a) * .27;
+                        g2.draw(new java.awt.geom.Ellipse2D.Double(s * (px - .15), s * (py - .15), s * .3, s * .3));
                     }
-                    g2.draw(new java.awt.geom.Ellipse2D.Double(s * .27, s * .27, s * .46, s * .46));
-                    g2.draw(new java.awt.geom.Ellipse2D.Double(s * .42, s * .42, s * .16, s * .16));
+                    g2.setColor(c != null && c.getBackground() != null ? c.getBackground() : Color.WHITE);
+                    g2.fill(new java.awt.geom.Ellipse2D.Double(s * .3, s * .3, s * .4, s * .4));
+                    g2.setColor(fg);
+                    g2.draw(new java.awt.geom.Ellipse2D.Double(s * .3, s * .3, s * .4, s * .4));
+                    dot(g2, .5, .5, .07);
                 }
-                case "image" -> {
-                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .12, s * .2, s * .76, s * .6, s * .1, s * .1));
-                    poly(g2, new double[]{.16, .4, .56, .66, .84}, new double[]{.76, .48, .64, .54, .72});
-                    dot(g2, .64, .36, .06);
+                case "image" -> {                                    // 노란 해와 언덕
+                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .1, s * .16, s * .8, s * .68, s * .24, s * .24));
+                    poly(g2, new double[]{.18, .4, .55, .64, .82}, new double[]{.74, .5, .64, .56, .72});
+                    g2.setColor(new Color(0xFFC93C));
+                    g2.fill(new java.awt.geom.Ellipse2D.Double(s * .56, s * .27, s * .17, s * .17));
                 }
                 default -> { }
             }
@@ -1164,21 +1273,24 @@ public class QuickMemo {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
             Color fg = c != null ? c.getForeground() : Color.DARK_GRAY;
-            Color bg = c != null ? c.getBackground() : Color.WHITE;
-            java.awt.geom.RoundRectangle2D box = new java.awt.geom.RoundRectangle2D.Double(x + 0.75, y + 1.75, BOX - 1.5, BOX - 1.5, 4, 4);
+            // 메모 테마의 포인트 색 (JTextPane 의 client property "accent")
+            Color accent = c instanceof JComponent jc && jc.getClientProperty("accent") instanceof Color a ? a : fg;
+            java.awt.geom.RoundRectangle2D box = new java.awt.geom.RoundRectangle2D.Double(x + 0.75, y + 1.75, BOX - 1.5, BOX - 1.5, 7, 7);
             if (done) {
-                g2.setColor(new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 150));
+                g2.setColor(accent);
                 g2.fill(box);
-                g2.setColor(bg);
-                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                g2.setColor(Color.WHITE);
+                g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                 java.awt.geom.Path2D.Double chk = new java.awt.geom.Path2D.Double();
                 chk.moveTo(x + 3.8, y + 9.2);
                 chk.lineTo(x + 6.6, y + 12);
                 chk.lineTo(x + 11.4, y + 6);
                 g2.draw(chk);
             } else {
-                g2.setColor(new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 170));
-                g2.setStroke(new BasicStroke(1.4f));
+                g2.setColor(new Color(255, 255, 255, 150));
+                g2.fill(box);
+                g2.setColor(new Color(accent.getRed(), accent.getGreen(), accent.getBlue(), 200));
+                g2.setStroke(new BasicStroke(1.6f));
                 g2.draw(box);
             }
             g2.dispose();
@@ -1239,6 +1351,60 @@ public class QuickMemo {
         g.drawImage(loaded.getImage(), 0, 0, null);
         g.dispose();
         return bi;
+    }
+
+    /** 앱 아이콘: 동글한 메모지 + 분홍 마스킹테이프 + 하트 (창 아이콘·ico 공용) */
+    static java.awt.image.BufferedImage appIcon(int size, Theme theme) {
+        java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(size, size, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g = img.createGraphics();
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+        double s = size, m = s * .1, w = s - 2 * m;
+        Shape note = new java.awt.geom.RoundRectangle2D.Double(m, m + s * .04, w, w * .92, s * .26, s * .26);
+        g.setColor(theme.header);
+        g.fill(note);
+        g.setColor(theme.header.darker());
+        g.setStroke(new BasicStroke((float) Math.max(1, s / 40)));
+        g.draw(note);
+        // 마스킹테이프
+        Shape tape = java.awt.geom.AffineTransform.getRotateInstance(-0.2, s * .5, s * .13)
+                .createTransformedShape(new java.awt.geom.RoundRectangle2D.Double(s * .32, s * .05, s * .36, s * .16, s * .05, s * .05));
+        g.setColor(new Color(255, 160, 190, 220));
+        g.fill(tape);
+        // 하트
+        g.setColor(PINK);
+        g.fill(NoteShape.Heart.outline(s * .3, s * .38, s * .4, s * .38));
+        if (size >= 32) {                                      // 반짝이
+            g.setColor(new Color(255, 255, 255, 200));
+            g.fill(new java.awt.geom.Ellipse2D.Double(s * .37, s * .45, s * .08, s * .07));
+        }
+        g.dispose();
+        return img;
+    }
+
+    /** 얇고 둥근 스크롤바 */
+    static final class CuteScrollBarUI extends javax.swing.plaf.basic.BasicScrollBarUI {
+        @Override protected JButton createDecreaseButton(int o) { return zero(); }
+        @Override protected JButton createIncreaseButton(int o) { return zero(); }
+
+        static JButton zero() {
+            JButton b = new JButton();
+            b.setPreferredSize(new Dimension(0, 0));
+            return b;
+        }
+
+        @Override protected void paintTrack(Graphics g, JComponent c, Rectangle r) { }
+
+        @Override
+        protected void paintThumb(Graphics g, JComponent c, Rectangle r) {
+            if (r.isEmpty()) return;
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            Color a = c.getClientProperty("accent") instanceof Color col ? col : new Color(0xD8C8B8);
+            g2.setColor(new Color(a.getRed(), a.getGreen(), a.getBlue(), isThumbRollover() ? 220 : 150));
+            g2.fillRoundRect(r.x + 2, r.y + 2, r.width - 4, r.height - 4, r.width - 4, r.width - 4);
+            g2.dispose();
+        }
     }
 
     /** 스크롤 창 너비를 따라가는 패널 (가로 스크롤 없이 세로로만 스크롤) */
@@ -1554,7 +1720,11 @@ public class QuickMemo {
 
     // ===================================================================== 노트 창
     static final class NoteWindow extends JFrame {
-        static final int EDGE = 6;
+        /** 그림자를 그릴 바깥 여백 (이 여백 가장자리를 잡으면 크기 조절) */
+        static final int M = 12, EDGE = 10, HEADER_H = 34;
+        static final boolean TRANSLUCENT = !GraphicsEnvironment.isHeadless()
+                && GraphicsEnvironment.getLocalGraphicsEnvironment().getDefaultScreenDevice()
+                    .isWindowTranslucencySupported(GraphicsDevice.WindowTranslucency.PERPIXEL_TRANSLUCENT);
 
         final App app;
         final Note note;
@@ -1562,17 +1732,15 @@ public class QuickMemo {
         final StyledDocument doc;
         final UndoManager undo = new UndoManager();
         final JPanel header = new JPanel(new BorderLayout());
-        final JPanel menu = new JPanel();
-        final JPanel swatches = new JPanel(new GridLayout(1, Theme.values().length, 0, 0));
         final JPanel formatBar = new JPanel(new WrapLayout(FlowLayout.LEFT, 2, 2));
         /** 서식 버튼 (id → 버튼), 기본 순서 */
         final Map<String, FlatButton> formatButtons = new LinkedHashMap<>();
         boolean dragSuppress;
         final JScrollPane scroll;
         final List<FlatButton> flatButtons = new ArrayList<>();
-        final List<FlatButton> menuButtons = new ArrayList<>();
         final FlatButton bBold, bItalic, bUnder, bStrike, bBullet;
-        final FlatButton topButton;
+        final ShapePanel content = new ShapePanel();
+        MenuPopup popup;
         final javax.swing.Timer saveTimer;
         boolean loading;
         boolean dirtyText;
@@ -1582,13 +1750,16 @@ public class QuickMemo {
             this.app = app;
             this.note = note;
             setUndecorated(true);
+            if (TRANSLUCENT) setBackground(new Color(0, 0, 0, 0));      // 모양 밖은 투명, 부드러운 그림자
             setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
-            setMinimumSize(new Dimension(220, 160));
+            setMinimumSize(minSizeFor(note.shape));
             setIconImage(makeIcon());
 
             // ---- 헤더
             FlatButton add = iconButton("plus", "새 메모 (Ctrl+N)", () -> app.newNote(this));
-            FlatButton more = iconButton("more", "메뉴", this::toggleMenu);
+            FlatButton[] moreRef = new FlatButton[1];
+            FlatButton more = iconButton("more", "색깔·모양·메뉴", () -> showMenu(moreRef[0]));
+            moreRef[0] = more;
             FlatButton close = iconButton("close", "메모 닫기 (Ctrl+W)", () -> app.closeNote(note));
             JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
             right.setOpaque(false);
@@ -1599,7 +1770,8 @@ public class QuickMemo {
             left.add(add);
             header.add(left, BorderLayout.WEST);
             header.add(right, BorderLayout.EAST);
-            header.setPreferredSize(new Dimension(10, 32));
+            header.setOpaque(false);
+            header.setPreferredSize(new Dimension(10, HEADER_H));
             MouseAdapter drag = new MouseAdapter() {
                 Point start;
                 public void mousePressed(MouseEvent e) { start = e.getPoint(); }
@@ -1610,34 +1782,6 @@ public class QuickMemo {
             };
             header.addMouseListener(drag);
             header.addMouseMotionListener(drag);
-
-            // ---- 메뉴 (색 선택 / 항상 위 / 노트 목록 / 삭제)
-            menu.setLayout(new BoxLayout(menu, BoxLayout.Y_AXIS));
-            for (Theme t : Theme.values()) swatches.add(new Swatch(t));
-            swatches.setBorder(new EmptyBorder(4, 6, 2, 6));
-            swatches.setPreferredSize(new Dimension(10, 44));
-            swatches.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
-            swatches.setAlignmentX(LEFT_ALIGNMENT);
-            menu.add(swatches);
-            topButton = menuItem("pin", "항상 위에 표시", () -> {
-                note.onTop = !note.onTop;
-                setAlwaysOnTop(note.onTop);
-                updateTopButton();
-                app.store.save(note);
-            });
-            menu.add(topButton);
-            menu.add(menuItem("list", "메모 목록", () -> { toggleMenu(); app.showList(); }));
-            menu.add(menuItem("trash", "메모 삭제", () -> app.deleteNote(note, this)));
-            menu.setVisible(false);
-
-            JPanel north = new JPanel();
-            north.setOpaque(false);
-            north.setLayout(new BoxLayout(north, BoxLayout.Y_AXIS));
-            header.setAlignmentX(LEFT_ALIGNMENT);
-            header.setMaximumSize(new Dimension(Integer.MAX_VALUE, 32));
-            menu.setAlignmentX(LEFT_ALIGNMENT);
-            north.add(header);
-            north.add(menu);
 
             // ---- 본문
             pane = new JTextPane() {
@@ -1657,11 +1801,18 @@ public class QuickMemo {
                 }
             };
             pane.setFont(BASE_FONT);
-            pane.setBorder(new EmptyBorder(8, 12, 8, 12));
+            pane.setBorder(new EmptyBorder(6, 12, 6, 10));
+            pane.setOpaque(false);                         // 스티커 모양(ShapePanel)이 배경을 그림
             doc = pane.getStyledDocument();
             pane.setTransferHandler(new NoteTransfer());   // 이미지 붙여넣기·끌어놓기
             scroll =new JScrollPane(pane, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
             scroll.setBorder(null);
+            scroll.setOpaque(false);
+            scroll.getViewport().setOpaque(false);
+            scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
+            scroll.getVerticalScrollBar().setUI(new CuteScrollBarUI());
+            scroll.getVerticalScrollBar().setOpaque(false);
+            formatBar.setOpaque(false);
 
             // ---- 서식 막대
             bBold = fmt("bold", "<html><b>B</b></html>", "굵게 (Ctrl+B)", () -> toggle(StyleConstants.Bold));
@@ -1676,9 +1827,7 @@ public class QuickMemo {
             bImage.setIcon(new Glyph("image", 16));
             applyFormatOrder();
 
-            JPanel content = new JPanel(new BorderLayout());
-            content.setBorder(new EmptyBorder(EDGE - 2, EDGE - 2, EDGE - 2, EDGE - 2));
-            content.add(north, BorderLayout.NORTH);
+            content.add(header, BorderLayout.NORTH);
             content.add(scroll, BorderLayout.CENTER);
             content.add(formatBar, BorderLayout.SOUTH);
             setContentPane(content);
@@ -1722,11 +1871,11 @@ public class QuickMemo {
             bindKeys();
             applyTheme();
             setAlwaysOnTop(note.onTop);
-            updateTopButton();
 
             if (note.bounds != null && onAnyScreen(note.bounds)) setBounds(note.bounds);
             else {
-                setSize(320, 320);
+                Dimension min = minSizeFor(note.shape);
+                setSize(Math.max(340, min.width), Math.max(340, min.height));
                 Rectangle scr = GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
                 int k = app.windows.size() % 8;
                 setLocation(scr.x + scr.width - 360 - k * 30, scr.y + 40 + k * 30);
@@ -1735,8 +1884,9 @@ public class QuickMemo {
 
             addComponentListener(new ComponentAdapter() {
                 public void componentMoved(ComponentEvent e) { boundsChanged(); }
-                public void componentResized(ComponentEvent e) { boundsChanged(); }
+                public void componentResized(ComponentEvent e) { boundsChanged(); updateWindowShape(); }
             });
+            updateWindowShape();
             addWindowListener(new WindowAdapter() {
                 public void windowClosing(WindowEvent e) { app.closeNote(note); }
             });
@@ -1875,20 +2025,6 @@ public class QuickMemo {
             return b;
         }
 
-        FlatButton menuItem(String kind, String text, Runnable r) {
-            FlatButton b = flat(text, null, r);
-            flatButtons.remove(b);
-            menuButtons.add(b);
-            b.setIcon(new Glyph(kind, 16));
-            b.setIconTextGap(10);
-            b.setHorizontalAlignment(SwingConstants.LEFT);
-            b.setFont(BASE_FONT.deriveFont(13f));
-            b.setMargin(new Insets(8, 14, 8, 14));
-            b.setAlignmentX(LEFT_ALIGNMENT);
-            b.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
-            return b;
-        }
-
         FlatButton fmt(String id, String text, String tip, Runnable r) {
             FlatButton b = flat(text, tip + " · 끌어서 순서 변경", () -> {
                 if (dragSuppress) { dragSuppress = false; return; }      // 끌기를 끝낸 놓기는 클릭으로 치지 않음
@@ -1960,27 +2096,19 @@ public class QuickMemo {
         // ---------- 테마
         void applyTheme() {
             Theme t = note.theme;
-            getContentPane().setBackground(t.body);
-            header.setBackground(t.header);
-            menu.setBackground(t.menuBg());
-            menu.setBorder(BorderFactory.createMatteBorder(0, 0, 1, 0, t.dark ? new Color(0x1A1A1A) : new Color(0xE0E0E0)));
-            swatches.setBackground(t.menuBg());
-            for (FlatButton b : menuButtons) {
-                b.setForeground(t.menuFg());
-                b.hoverColor = t.menuHover();
-            }
-            formatBar.setBackground(t.body);
-            pane.setBackground(t.body);
+            pane.setBackground(t.body);                            // 체크박스·아이콘 배경색 참조용 (불투명 아님)
             pane.setForeground(t.fg());
-            pane.setCaretColor(t.fg());
-            pane.setSelectionColor(t.dark ? new Color(0x2B5797) : new Color(0xB5D5FF));
+            pane.setCaretColor(t.accent);
+            pane.putClientProperty("accent", t.accent);
+            Color sel = t.dark ? new Color(0x7A5C8F) : new Color(t.accent.getRed(), t.accent.getGreen(), t.accent.getBlue(), 70);
+            pane.setSelectionColor(sel);
             pane.setSelectedTextColor(t.fg());
-            scroll.getViewport().setBackground(t.body);
             for (FlatButton b : flatButtons) {
                 b.setForeground(t.fg());
                 b.hoverColor = t.hover();
             }
-            swatches.repaint();
+            scroll.getVerticalScrollBar().putClientProperty("accent", t.header.darker());
+            setIconImage(makeIcon());
             repaint();
         }
 
@@ -1993,15 +2121,235 @@ public class QuickMemo {
             app.noteChanged();
         }
 
-        void toggleMenu() {
-            menu.setVisible(!menu.isVisible());
-            revalidate();
+        static Dimension minSizeFor(NoteShape s) { return new Dimension(s.minW + 2 * M, s.minH + 2 * M); }
+
+        /** 스티커 모양 바꾸기. 모양에 비해 창이 작으면 키움 */
+        void setNoteShape(NoteShape s) {
+            note.shape = s;
+            Dimension min = minSizeFor(s);
+            setMinimumSize(min);
+            if (getWidth() < min.width || getHeight() < min.height)
+                setSize(Math.max(getWidth(), min.width), Math.max(getHeight(), min.height));
+            note.updatedAt = nowTicks();
+            app.store.save(note);
+            content.revalidate();
+            updateWindowShape();
             repaint();
+            app.noteChanged();
         }
 
-        void updateTopButton() {
-            topButton.active = note.onTop;
-            topButton.repaint();
+        /** 투명 창을 못 쓰는 환경에서는 창 자체를 모양대로 자른다 */
+        void updateWindowShape() {
+            if (TRANSLUCENT) return;
+            setShape(note.shape.outline(M, M, getWidth() - 2 * M, getHeight() - 2 * M));
+        }
+
+        void showMenu(Component anchor) {
+            if (popup != null && popup.isVisible()) { popup.dispose(); return; }
+            popup = new MenuPopup();
+            Point p = anchor.getLocationOnScreen();
+            Rectangle scr = getGraphicsConfiguration().getBounds();
+            int x = Math.max(scr.x, Math.min(p.x + anchor.getWidth() - popup.getWidth() + 10, scr.x + scr.width - popup.getWidth()));
+            int y = p.y + anchor.getHeight() + 2;
+            if (y + popup.getHeight() > scr.y + scr.height) y = p.y - popup.getHeight() - 2;
+            popup.setLocation(x, y);
+            popup.setVisible(true);
+            popup.toFront();
+            popup.getContentPane().requestFocusInWindow();
+        }
+
+        // ---------- 스티커 모양을 그리는 바탕
+        /** 그림자 + 모양 + 위쪽 색 띠 + 바느질 점선. 안쪽 여백(insets)이 모양마다 달라 글이 모양 안에 들어감 */
+        final class ShapePanel extends JPanel {
+            ShapePanel() {
+                super(new BorderLayout());
+                setOpaque(false);
+            }
+
+            java.awt.geom.Rectangle2D box() {
+                return new java.awt.geom.Rectangle2D.Double(M, M - 3, Math.max(1, getWidth() - 2 * M), Math.max(1, getHeight() - 2 * M));
+            }
+
+            @Override
+            public Insets getInsets() {
+                NoteShape s = note.shape;
+                var b = box();
+                int pad = s == NoteShape.Square || s == NoteShape.Bubble ? 6 : 2;
+                return new Insets((int) (b.getY() + b.getHeight() * s.top) + pad, (int) (b.getX() + b.getWidth() * s.left) + pad,
+                        (int) (getHeight() - b.getMaxY() + b.getHeight() * s.bottom) + pad, (int) (getWidth() - b.getMaxX() + b.getWidth() * s.right) + pad);
+            }
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE);
+                Theme t = note.theme;
+                var b = box();
+                Shape sh = note.shape.outline(b.getX(), b.getY(), b.getWidth(), b.getHeight());
+                if (TRANSLUCENT) {
+                    // 가장자리 띠는 거의 투명하게 칠해 마우스로 잡을 수 있게 (크기 조절)
+                    java.awt.geom.Area band = new java.awt.geom.Area(new Rectangle(0, 0, getWidth(), getHeight()));
+                    band.subtract(new java.awt.geom.Area(new Rectangle(EDGE, EDGE, getWidth() - 2 * EDGE, getHeight() - 2 * EDGE)));
+                    g2.setColor(new Color(0, 0, 0, 1));
+                    g2.fill(band);
+                    Shape shadow = java.awt.geom.AffineTransform.getTranslateInstance(0, 4).createTransformedShape(sh);
+                    for (int i = 7; i >= 1; i--) {                     // 몽글한 그림자
+                        g2.setColor(new Color(120, 80, 60, 6));
+                        g2.setStroke(new BasicStroke(i * 2.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                        g2.draw(shadow);
+                    }
+                }
+                g2.setColor(t.body);
+                g2.fill(sh);
+                Shape oldClip = g2.getClip();
+                g2.clip(sh);
+                int bandBottom = getInsets().top + HEADER_H - 2;
+                g2.setColor(t.header);
+                g2.fillRect(0, 0, getWidth(), bandBottom);
+                // 색 띠 아래 바느질 점선
+                g2.setColor(new Color(255, 255, 255, t.dark ? 70 : 200));
+                g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{1f, 6f}, 0f));
+                g2.drawLine(0, bandBottom - 5, getWidth(), bandBottom - 5);
+                // 위쪽 반짝임
+                g2.setPaint(new GradientPaint(0, (float) b.getY(), new Color(255, 255, 255, t.dark ? 25 : 90), 0, (float) (b.getY() + b.getHeight() * .5), new Color(255, 255, 255, 0)));
+                g2.fill(sh);
+                g2.setClip(oldClip);
+                g2.setColor(new Color(t.header.darker().getRed(), t.header.darker().getGreen(), t.header.darker().getBlue(), 140));
+                g2.setStroke(new BasicStroke(1.3f));
+                g2.draw(sh);
+                g2.dispose();
+            }
+        }
+
+        // ---------- 색깔·모양·메뉴 팝업
+        /** ⋯ 를 누르면 뜨는 둥근 팝업. 바깥을 누르면 닫힘 */
+        final class MenuPopup extends JWindow {
+            MenuPopup() {
+                super(NoteWindow.this);
+                Theme t = note.theme;
+                if (TRANSLUCENT) setBackground(new Color(0, 0, 0, 0));
+                JPanel root = new JPanel() {
+                    @Override
+                    protected void paintComponent(Graphics g) {
+                        Graphics2D g2 = (Graphics2D) g.create();
+                        g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                        int w = getWidth(), h = getHeight();
+                        if (TRANSLUCENT) for (int i = 5; i >= 1; i--) {
+                            g2.setColor(new Color(120, 80, 60, 9));
+                            g2.fillRoundRect(6 - i, 6 - i + 2, w - 12 + 2 * i, h - 12 + 2 * i, 26 + i, 26 + i);
+                        }
+                        g2.setColor(t.menuBg());
+                        g2.fillRoundRect(6, 6, w - 12, h - 12, 24, 24);
+                        g2.setColor(new Color(t.accent.getRed(), t.accent.getGreen(), t.accent.getBlue(), 90));
+                        g2.setStroke(new BasicStroke(1.2f));
+                        g2.drawRoundRect(6, 6, w - 13, h - 13, 24, 24);
+                        g2.dispose();
+                    }
+                };
+                root.setOpaque(!TRANSLUCENT);
+                root.setBackground(t.menuBg());
+                root.setLayout(new BoxLayout(root, BoxLayout.Y_AXIS));
+                root.setBorder(new EmptyBorder(16, 18, 14, 18));
+                root.setFocusable(true);
+
+                root.add(sectionLabel("색깔", t));
+                JPanel colors = new JPanel(new GridLayout(1, Theme.values().length, 6, 0));
+                colors.setOpaque(false);
+                for (Theme th : Theme.values()) colors.add(new Swatch(th));
+                colors.setAlignmentX(LEFT_ALIGNMENT);
+                root.add(colors);
+                root.add(Box.createVerticalStrut(10));
+                root.add(sectionLabel("스티커 모양", t));
+                JPanel shapes = new JPanel(new GridLayout(1, NoteShape.values().length, 6, 0));
+                shapes.setOpaque(false);
+                for (NoteShape s : NoteShape.values()) shapes.add(new ShapeChip(s));
+                shapes.setAlignmentX(LEFT_ALIGNMENT);
+                root.add(shapes);
+                root.add(Box.createVerticalStrut(10));
+                FlatButton top = item("pin", "항상 위에 표시", () -> {
+                    note.onTop = !note.onTop;
+                    setAlwaysOnTop(note.onTop);
+                    app.store.save(note);
+                    dispose();
+                });
+                top.active = note.onTop;
+                root.add(top);
+                root.add(item("list", "메모 목록", () -> { dispose(); app.showList(); }));
+                root.add(item("trash", "메모 삭제", () -> { dispose(); app.deleteNote(note, NoteWindow.this); }));
+
+                setContentPane(root);
+                pack();
+                setSize(Math.max(getWidth(), 300), getHeight());
+                addWindowFocusListener(new WindowAdapter() {
+                    public void windowLostFocus(WindowEvent e) { dispose(); }
+                });
+                NoteWindow.bind(root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), root.getActionMap(),
+                        KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close", this::dispose);
+            }
+
+            JLabel sectionLabel(String text, Theme t) {
+                JLabel l = new JLabel(text);
+                l.setFont(BASE_FONT.deriveFont(Font.BOLD, 12f));
+                l.setForeground(new Color(t.menuFg().getRed(), t.menuFg().getGreen(), t.menuFg().getBlue(), 170));
+                l.setBorder(new EmptyBorder(0, 2, 6, 0));
+                l.setAlignmentX(LEFT_ALIGNMENT);
+                return l;
+            }
+
+            FlatButton item(String kind, String text, Runnable r) {
+                Theme t = note.theme;
+                FlatButton b = new FlatButton(text, null);
+                b.setIcon(new Glyph(kind, 16));
+                b.setIconTextGap(10);
+                b.setHorizontalAlignment(SwingConstants.LEFT);
+                b.setFont(BASE_FONT.deriveFont(13f));
+                b.setMargin(new Insets(7, 10, 7, 10));
+                b.setAlignmentX(LEFT_ALIGNMENT);
+                b.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
+                b.setForeground(t.menuFg());
+                b.hoverColor = t.menuHover();
+                b.addActionListener(e -> r.run());
+                return b;
+            }
+        }
+
+        /** 모양 선택 칩: 지금 색으로 채운 작은 모양 */
+        final class ShapeChip extends JComponent {
+            final NoteShape shape;
+
+            ShapeChip(NoteShape shape) {
+                this.shape = shape;
+                setToolTipText(shape.label);
+                setPreferredSize(new Dimension(34, 34));
+                setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                addMouseListener(new MouseAdapter() {
+                    public void mouseClicked(MouseEvent e) {
+                        setNoteShape(ShapeChip.this.shape);
+                        if (popup != null) popup.repaint();
+                    }
+                });
+            }
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                Theme t = note.theme;
+                boolean sel = note.shape == shape;
+                if (sel) {
+                    g2.setColor(t.menuHover());
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), 14, 14);
+                }
+                int s = Math.min(getWidth(), getHeight()) - 10;
+                Shape o = shape.outline((getWidth() - s) / 2.0, (getHeight() - s) / 2.0, s, s);
+                g2.setColor(t.header);
+                g2.fill(o);
+                g2.setColor(sel ? t.accent : new Color(t.menuFg().getRed(), t.menuFg().getGreen(), t.menuFg().getBlue(), 120));
+                g2.setStroke(new BasicStroke(sel ? 2f : 1.3f));
+                g2.draw(o);
+                g2.dispose();
+            }
         }
 
         // ---------- 저장
@@ -2301,17 +2649,7 @@ public class QuickMemo {
             });
         }
 
-        Image makeIcon() {
-            Image img = new java.awt.image.BufferedImage(32, 32, java.awt.image.BufferedImage.TYPE_INT_ARGB);
-            Graphics2D g = (Graphics2D) img.getGraphics();
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g.setColor(note.theme.header);
-            g.fillRoundRect(2, 2, 28, 28, 6, 6);
-            g.setColor(new Color(0, 0, 0, 80));
-            g.drawRoundRect(2, 2, 27, 27, 6, 6);
-            g.dispose();
-            return img;
-        }
+        Image makeIcon() { return appIcon(32, note.theme); }
 
         // ---------- 색 견본
         final class Swatch extends JComponent {
@@ -2320,27 +2658,39 @@ public class QuickMemo {
             Swatch(Theme theme) {
                 this.theme = theme;
                 setToolTipText(theme.label);
+                setPreferredSize(new Dimension(32, 32));
                 setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                 addMouseListener(new MouseAdapter() {
-                    public void mouseClicked(MouseEvent e) { setTheme(Swatch.this.theme); }
+                    public void mouseClicked(MouseEvent e) {
+                        setTheme(Swatch.this.theme);
+                        if (popup != null) popup.dispose();        // 색이 바뀌면 팝업 색도 바뀌므로 닫음
+                    }
                 });
             }
 
             @Override
-            protected void paintComponent(Graphics g) {
+            protected void paintComponent(Graphics g) {                  // 동글동글한 색 구슬
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                int in = 4, w = getWidth() - 2 * in, h = getHeight() - 2 * in;
+                boolean sel = note.theme == theme;
+                int d = Math.min(getWidth(), getHeight()) - 6, x = (getWidth() - d) / 2, y = (getHeight() - d) / 2;
+                if (sel) {
+                    g2.setColor(theme.accent);
+                    g2.setStroke(new BasicStroke(2.2f));
+                    g2.drawOval(x - 2, y - 2, d + 3, d + 3);
+                }
                 g2.setColor(theme.header);
-                g2.fillRoundRect(in, in, w, h, 6, 6);
-                g2.setColor(note.theme == theme ? note.theme.menuFg() : new Color(0, 0, 0, 35));
-                g2.setStroke(new BasicStroke(note.theme == theme ? 1.6f : 1f));
-                g2.drawRoundRect(in, in, w - 1, h - 1, 6, 6);
-                if (note.theme == theme) {
-                    g2.setColor(theme.fg());
-                    g2.setStroke(new BasicStroke(2f));
+                g2.fillOval(x, y, d, d);
+                g2.setColor(new Color(255, 255, 255, 140));
+                g2.fillOval(x + d / 4, y + d / 6, d / 4, d / 5);               // 반짝 하이라이트
+                g2.setColor(new Color(0, 0, 0, 25));
+                g2.setStroke(new BasicStroke(1f));
+                g2.drawOval(x, y, d - 1, d - 1);
+                if (sel) {
+                    g2.setColor(theme.dark ? Color.WHITE : theme.accent.darker());
+                    g2.setStroke(new BasicStroke(2.2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                     int cx = getWidth() / 2, cy = getHeight() / 2;
-                    g2.drawPolyline(new int[]{cx - 6, cx - 2, cx + 6}, new int[]{cy, cy + 4, cy - 5}, 3);
+                    g2.drawPolyline(new int[]{cx - 5, cx - 1, cx + 5}, new int[]{cy, cy + 4, cy - 4}, 3);
                 }
                 g2.dispose();
             }
@@ -2385,9 +2735,12 @@ public class QuickMemo {
             }
 
             public void mouseDragged(MouseEvent e) {
-                if (edge == 0) return;
                 Point p = e.getLocationOnScreen();
                 int dx = p.x - start.x, dy = p.y - start.y;
+                if (edge == 0) {                                     // 모양의 빈 부분(하트 귀퉁이 등)을 잡으면 창 이동
+                    setLocation(startBounds.x + dx, startBounds.y + dy);
+                    return;
+                }
                 Rectangle r = new Rectangle(startBounds);
                 Dimension min = getMinimumSize();
                 if ((edge & 1) != 0) { r.width = Math.max(min.width, startBounds.width - dx); r.x = startBounds.x + startBounds.width - r.width; }
@@ -2412,15 +2765,25 @@ public class QuickMemo {
         final App app;
         final JTextField search = new JTextField() {
             @Override
-            protected void paintComponent(Graphics g) {
+            protected void paintComponent(Graphics g) {                 // 알약 모양 검색창
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(getBackground());
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, getHeight(), getHeight());
+                g2.setColor(isFocusOwner() ? PINK : new Color(PINK.getRed(), PINK.getGreen(), PINK.getBlue(), 90));
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 3, getHeight() - 2, getHeight() - 2);
+                new Glyph("search", 16).paintIcon(this, g2, 12, (getHeight() - 16) / 2);
+                g2.dispose();
                 super.paintComponent(g);
                 if (getText().isEmpty()) {
-                    Graphics2D g2 = (Graphics2D) g.create();
-                    g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
-                    g2.setColor(Color.GRAY);
+                    Graphics2D g3 = (Graphics2D) g.create();
+                    g3.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+                    Color f = getForeground();
+                    g3.setColor(new Color(f.getRed(), f.getGreen(), f.getBlue(), 110));
                     Insets in = getInsets();
-                    g2.drawString("검색...", in.left + 2, in.top + g2.getFontMetrics().getAscent() + 1);
-                    g2.dispose();
+                    g3.drawString("메모 찾기...", in.left + 2, in.top + g3.getFontMetrics().getAscent() + 1);
+                    g3.dispose();
                 }
             }
         };
@@ -2437,7 +2800,10 @@ public class QuickMemo {
             setSize(380, 560);
             setLocationRelativeTo(null);
 
-            title.setFont(BASE_FONT.deriveFont(Font.BOLD, 20f));
+            setIconImage(appIcon(32, Theme.Yellow));
+            title.setFont(BASE_FONT.deriveFont(Font.BOLD, 21f));
+            title.setIcon(new Glyph("heart", 20));
+            title.setIconTextGap(6);
             FlatButton add = new FlatButton("", "새 메모 (Ctrl+N)");
             add.setIcon(new Glyph("plus", 20));
             add.setPreferredSize(new Dimension(40, 36));
@@ -2458,8 +2824,12 @@ public class QuickMemo {
             top.setOpaque(false);   // 기본 밝은 배경이 칠해지면 어둡게 모드에서 제목·버튼이 안 보임
 
             search.setFont(BASE_FONT);
-            search.setBorder(BorderFactory.createCompoundBorder(
-                    BorderFactory.createLineBorder(new Color(0, 0, 0, 40)), new EmptyBorder(6, 8, 6, 8)));
+            search.setOpaque(false);
+            search.setBorder(new EmptyBorder(8, 34, 8, 14));
+            search.addFocusListener(new FocusAdapter() {
+                public void focusGained(FocusEvent e) { search.repaint(); }
+                public void focusLost(FocusEvent e) { search.repaint(); }
+            });
             search.getDocument().addDocumentListener(new DocumentListener() {
                 public void insertUpdate(DocumentEvent e) { refresh(); }
                 public void removeUpdate(DocumentEvent e) { refresh(); }
@@ -2482,6 +2852,9 @@ public class QuickMemo {
             scroll = new JScrollPane(holder, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
             scroll.setBorder(null);
             scroll.getVerticalScrollBar().setUnitIncrement(16);
+            scroll.getVerticalScrollBar().setUI(new CuteScrollBarUI());
+            scroll.getVerticalScrollBar().setPreferredSize(new Dimension(10, 0));
+            scroll.getVerticalScrollBar().putClientProperty("accent", PINK);
 
             JPanel root = new JPanel(new BorderLayout());
             root.add(north, BorderLayout.NORTH);
@@ -2503,8 +2876,8 @@ public class QuickMemo {
             applyMode();
         }
 
-        Color bg() { return app.store.darkMode() ? new Color(0x202020) : new Color(0xF3F3F3); }
-        Color fg() { return app.store.darkMode() ? new Color(0xF0F0F0) : new Color(0x1F1F1F); }
+        Color bg() { return app.store.darkMode() ? new Color(0x2A2633) : CREAM; }
+        Color fg() { return app.store.darkMode() ? new Color(0xFFF4F8) : new Color(0x5A4636); }
 
         void applyMode() {
             Color bg = bg(), fg = fg();
@@ -2513,9 +2886,10 @@ public class QuickMemo {
             title.setForeground(fg);
             for (FlatButton b : buttons) {
                 b.setForeground(fg);
-                b.hoverColor = app.store.darkMode() ? new Color(255, 255, 255, 40) : new Color(0, 0, 0, 28);
+                b.setBackground(bg);
+                b.hoverColor = app.store.darkMode() ? new Color(255, 255, 255, 40) : new Color(255, 160, 190, 60);
             }
-            search.setBackground(app.store.darkMode() ? new Color(0x2D2D2D) : Color.WHITE);
+            search.setBackground(app.store.darkMode() ? new Color(0x37323F) : Color.WHITE);
             search.setForeground(fg);
             search.setCaretColor(fg);
             refresh();
@@ -2563,7 +2937,7 @@ public class QuickMemo {
             if (star) l.setIcon(new Glyph("starFilled", 14));
             l.setIconTextGap(6);
             l.setFont(BASE_FONT.deriveFont(Font.BOLD, 12f));
-            l.setForeground(app.store.darkMode() ? new Color(0xBBBBBB) : new Color(0x666666));
+            l.setForeground(app.store.darkMode() ? new Color(0xFFB0CC) : new Color(0xE07799));
             l.setBorder(new EmptyBorder(4, 2, 6, 0));
             l.setAlignmentX(LEFT_ALIGNMENT);
             return l;
@@ -2610,13 +2984,30 @@ public class QuickMemo {
                 super(new BorderLayout());
                 this.note = note;
                 setOpaque(false);
-                setBorder(new EmptyBorder(10, 12, 12, 8));
+                setBorder(new EmptyBorder(14, 14, 16, 12));
                 setAlignmentX(LEFT_ALIGNMENT);
 
                 Theme t = note.theme;
                 JLabel time = new JLabel(when(note.updatedAt));
                 time.setFont(BASE_FONT.deriveFont(11f));
-                time.setForeground(t.dark ? new Color(0xCCCCCC) : new Color(0x666666));
+                time.setForeground(new Color(t.fg().getRed(), t.fg().getGreen(), t.fg().getBlue(), 150));
+                if (note.shape != NoteShape.Square) {                    // 사각이 아닌 스티커는 모양 표시
+                    time.setIcon(new Icon() {
+                        public int getIconWidth() { return 14; }
+                        public int getIconHeight() { return 14; }
+                        public void paintIcon(Component c, Graphics g, int x, int y) {
+                            Graphics2D g2 = (Graphics2D) g.create();
+                            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                            Shape o = note.shape.outline(x + 1, y + 1, 12, 12);
+                            g2.setColor(t.header);
+                            g2.fill(o);
+                            g2.setColor(t.accent);
+                            g2.draw(o);
+                            g2.dispose();
+                        }
+                    });
+                    time.setIconTextGap(5);
+                }
                 FlatButton more = new FlatButton("", "메뉴");
                 more.setIcon(new Glyph("more", 16));
                 more.setForeground(t.fg());
@@ -2732,20 +3123,32 @@ public class QuickMemo {
             }
 
             @Override
-            protected void paintComponent(Graphics g) {
+            protected void paintComponent(Graphics g) {                  // 그림자 + 둥근 카드 + 마스킹테이프
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                Shape clip = new java.awt.geom.RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 8, 8);
-                g2.setClip(clip);
-                g2.setColor(note.theme.body);
-                g2.fillRect(0, 0, getWidth(), getHeight());
-                g2.setColor(note.theme.header);
-                g2.fillRect(0, 0, getWidth(), 4);
+                Theme t = note.theme;
+                int w = getWidth(), h = getHeight(), r = 20;
+                for (int i = 4; i >= 1; i--) {
+                    g2.setColor(new Color(120, 80, 60, 8));
+                    g2.fillRoundRect(3 - i, 5 - i, w - 6 + 2 * i, h - 8 + 2 * i, r + i, r + i);
+                }
+                g2.setColor(t.body);
+                g2.fillRoundRect(3, 3, w - 6, h - 8, r, r);
+                g2.setColor(new Color(t.header.darker().getRed(), t.header.darker().getGreen(), t.header.darker().getBlue(), 110));
+                g2.setStroke(new BasicStroke(1.2f));
+                g2.drawRoundRect(3, 3, w - 7, h - 9, r, r);
+                // 위에 살짝 기울여 붙인 마스킹테이프
+                Shape tape = java.awt.geom.AffineTransform.getRotateInstance(-0.06, w / 2.0, 4)
+                        .createTransformedShape(new java.awt.geom.Rectangle2D.Double(w / 2.0 - 30, -4, 60, 15));
+                g2.setColor(new Color(t.header.getRed(), t.header.getGreen(), t.header.getBlue(), 230));
+                g2.fill(tape);
+                g2.setColor(new Color(255, 255, 255, 110));
+                g2.setStroke(new BasicStroke(1f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{2f, 3f}, 0f));
+                g2.draw(tape);
                 if (dragging) {                                          // 끌고 있는 카드 표시
-                    g2.setClip(null);
-                    g2.setColor(new Color(0x2B6CD9));
-                    g2.setStroke(new BasicStroke(2f));
-                    g2.draw(new java.awt.geom.RoundRectangle2D.Float(1, 1, getWidth() - 2, getHeight() - 2, 8, 8));
+                    g2.setColor(PINK);
+                    g2.setStroke(new BasicStroke(2.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND, 1f, new float[]{6f, 5f}, 0f));
+                    g2.drawRoundRect(3, 3, w - 7, h - 9, r, r);
                 }
                 g2.dispose();
                 super.paintComponent(g);
