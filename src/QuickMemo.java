@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.11";
+    static final String VERSION = "1.0.12";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -1960,6 +1960,9 @@ public class QuickMemo {
         final FlatButton bBold, bItalic, bUnder, bStrike, bBullet;
         final ShapePanel content = new ShapePanel();
         MenuPopup popup;
+        FlatButton moreBtn;
+
+        Component moreButton() { return moreBtn; }
         final javax.swing.Timer saveTimer;
         boolean loading;
         boolean dirtyText;
@@ -1979,6 +1982,7 @@ public class QuickMemo {
             FlatButton[] moreRef = new FlatButton[1];
             FlatButton more = iconButton("more", "색깔·모양·메뉴", () -> showMenu(moreRef[0]));
             moreRef[0] = more;
+            moreBtn = more;
             FlatButton close = iconButton("close", "메모 닫기 (Ctrl+W)", () -> app.closeNote(note));
             JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
             right.setOpaque(false);
@@ -2380,29 +2384,49 @@ public class QuickMemo {
         void showMenu(Component anchor) {
             if (popup != null && popup.isVisible()) { popup.dispose(); return; }
             popup = new MenuPopup();
+            popupAnchor = anchor;
             placePopup();
             popup.setVisible(true);
             popup.toFront();
             popup.getContentPane().requestFocusInWindow();
         }
 
-        /** 메모 옆(오른쪽, 자리가 없으면 왼쪽, 그것도 없으면 아래/위)에 띄워 색·모양을 바꾸는 모습이 가려지지 않게 */
+        Component popupAnchor;
+
+        /**
+         * 메뉴를 ⋯ 버튼 높이에서 모양 바로 옆(오른쪽, 자리가 없으면 왼쪽)에 붙이고 꼬리로 버튼을 가리킨다.
+         * 메모를 가리지 않아 색·모양을 바꾸는 모습이 그대로 보인다. 양옆 모두 자리가 없으면 메모 아래/위.
+         */
         void placePopup() {
             if (popup == null) return;
             Rectangle scr = getGraphicsConfiguration().getBounds();
             Rectangle me = getBounds();
-            int pw = popup.getWidth(), ph = popup.getHeight(), gap = 4;
-            int x = me.x + me.width - M + gap;
-            if (x + pw > scr.x + scr.width) x = me.x + M - gap - pw;
-            if (x < scr.x) {
+            int pw = popup.getWidth(), ph = popup.getHeight(), sh = MenuPopup.SH, gap = 2;
+            Component a = popupAnchor != null && popupAnchor.isShowing() ? popupAnchor : header;
+            Point ap = SwingUtilities.convertPoint(a, 0, a.getHeight() / 2, content);
+            // 버튼 높이에서 모양의 오른쪽·왼쪽 끝
+            var b = content.box();
+            java.awt.geom.Area area = new java.awt.geom.Area(note.shape.outline(b.getX(), b.getY(), b.getWidth(), b.getHeight()));
+            int right = (int) b.getMaxX(), left = (int) b.getX();
+            while (right > ap.x && !area.contains(right, ap.y)) right--;
+            while (left < ap.x && !area.contains(left, ap.y)) left++;
+            int screenY = me.y + ap.y;
+            int x = me.x + right + gap - sh + MenuPopup.TAIL, side = -1;          // 오른쪽: 꼬리가 왼쪽으로
+            if (x + pw - sh > scr.x + scr.width) { x = me.x + left - gap + sh - MenuPopup.TAIL - pw; side = 1; }
+            if (x + sh < scr.x) {                                                // 양옆 모두 자리가 없으면 아래/위
+                popup.tailSide = 0;
                 x = Math.max(scr.x, Math.min(me.x + (me.width - pw) / 2, scr.x + scr.width - pw));
-                int y = me.y + me.height - M + gap;
-                if (y + ph > scr.y + scr.height) y = Math.max(scr.y, me.y + M - gap - ph);
+                int y = me.y + me.height - M;
+                if (y + ph > scr.y + scr.height) y = Math.max(scr.y, me.y + M - ph);
                 popup.setLocation(x, y);
-            } else {
-                int y = Math.max(scr.y, Math.min(me.y + M, scr.y + scr.height - ph));
-                popup.setLocation(x, y);
+                popup.repaint();
+                return;
             }
+            int y = Math.max(scr.y, Math.min(screenY - sh - 26, scr.y + scr.height - ph));   // 첫 줄(색깔)이 버튼 높이 근처
+            popup.tailSide = side;
+            popup.tailY = screenY - y;
+            popup.setLocation(x, y);
+            popup.repaint();
         }
 
         // ---------- 스티커 모양을 그리는 바탕
@@ -2583,24 +2607,21 @@ public class QuickMemo {
                     protected void paintComponent(Graphics g) {
                         Graphics2D g2 = (Graphics2D) g.create();
                         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                        int w = getWidth(), h = getHeight(), arc = cute() ? 24 : 10;
-                        if (TRANSLUCENT) for (int i = 5; i >= 1; i--) {
-                            g2.setColor(cute() ? new Color(120, 80, 60, 9) : new Color(0, 0, 0, 8));
-                            g2.fillRoundRect(6 - i, 6 - i + 2, w - 12 + 2 * i, h - 12 + 2 * i, arc + 2 + i, arc + 2 + i);
-                        }
+                        Shape card = cardShape(getWidth(), getHeight());
+                        if (TRANSLUCENT) g2.drawImage(shadow(card, getWidth(), getHeight()), 0, 0, null);
                         g2.setColor(t.menuBg());
-                        g2.fillRoundRect(6, 6, w - 12, h - 12, arc, arc);
-                        g2.setColor(cute() ? new Color(t.accent.getRed(), t.accent.getGreen(), t.accent.getBlue(), 90)
-                                : new Color(0, 0, 0, t.dark ? 120 : 40));
-                        g2.setStroke(new BasicStroke(1.2f));
-                        g2.drawRoundRect(6, 6, w - 13, h - 13, arc, arc);
+                        g2.fill(card);
+                        g2.setColor(cute() ? new Color(t.accent.getRed(), t.accent.getGreen(), t.accent.getBlue(), 70)
+                                : new Color(0, 0, 0, t.dark ? 110 : 30));
+                        g2.setStroke(new BasicStroke(1f));
+                        g2.draw(card);
                         g2.dispose();
                     }
                 };
                 root.setOpaque(!TRANSLUCENT);
                 root.setBackground(t.menuBg());
                 root.setLayout(new BoxLayout(root, BoxLayout.Y_AXIS));
-                root.setBorder(new EmptyBorder(16, 18, 14, 18));
+                root.setBorder(new EmptyBorder(SH + 10, SH + 12, SH + 8, SH + 12));
                 root.setFocusable(true);
 
                 root.add(sectionLabel("색깔", t));
@@ -2636,6 +2657,50 @@ public class QuickMemo {
                 });
                 NoteWindow.bind(root.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), root.getActionMap(),
                         KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close", this::dispose);
+            }
+
+            /** 그림자 여백, 꼬리 크기. 꼬리는 메모 쪽(왼쪽/오른쪽)으로 나와 ⋯ 버튼을 가리킨다 */
+            static final int SH = 14, TAIL = 9;
+            int tailSide;                                            // -1 왼쪽, 1 오른쪽, 0 없음
+            int tailY = 40;                                          // 창 안에서 꼬리 끝의 y
+            java.awt.image.BufferedImage shadowImg;
+            String shadowKey;
+
+            Shape cardShape(int w, int h) {
+                double arc = cute() ? 22 : 12;
+                java.awt.geom.Area a = new java.awt.geom.Area(new java.awt.geom.RoundRectangle2D.Double(SH, SH, w - 2 * SH - 1, h - 2 * SH - 1, arc, arc));
+                if (tailSide != 0) {
+                    double ty = Math.max(SH + arc / 2 + TAIL, Math.min(h - SH - arc / 2 - TAIL, tailY));
+                    double base = tailSide < 0 ? SH + 1 : w - SH - 2, tip = tailSide < 0 ? SH - TAIL + 2 : w - SH + TAIL - 3;
+                    java.awt.geom.Path2D.Double p = new java.awt.geom.Path2D.Double();
+                    p.moveTo(base, ty - TAIL);
+                    p.quadTo(base, ty - 2, tip, ty);                   // 살짝 휜 말풍선 꼬리
+                    p.quadTo(base, ty + 2, base, ty + TAIL);
+                    p.closePath();
+                    a.add(new java.awt.geom.Area(p));
+                }
+                return a;
+            }
+
+            /** 부드럽게 번진 그림자 (크기·꼬리가 같으면 다시 만들지 않음) */
+            java.awt.image.BufferedImage shadow(Shape card, int w, int h) {
+                String key = w + "x" + h + "/" + tailSide + "/" + tailY;
+                if (!key.equals(shadowKey)) {
+                    java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+                    Graphics2D g = img.createGraphics();
+                    g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g.setColor(new Color(0, 0, 0, note.theme.dark ? 120 : 70));
+                    g.fill(java.awt.geom.AffineTransform.getTranslateInstance(0, 3).createTransformedShape(card));
+                    g.dispose();
+                    int r = 6;
+                    float[] k = new float[(2 * r + 1) * (2 * r + 1)];
+                    java.util.Arrays.fill(k, 1f / k.length);
+                    java.awt.image.ConvolveOp blur = new java.awt.image.ConvolveOp(new java.awt.image.Kernel(2 * r + 1, 2 * r + 1, k),
+                            java.awt.image.ConvolveOp.EDGE_NO_OP, null);
+                    shadowImg = blur.filter(img, null);
+                    shadowKey = key;
+                }
+                return shadowImg;
             }
 
             JLabel sectionLabel(String text, Theme t) {
