@@ -775,8 +775,16 @@ public class QuickMemo {
 
         boolean deleted() { return deletedAt != null; }
 
+        /** 잠금: 본문을 암호화해서 저장하고, 목록·창에서 내용을 가린다 */
+        boolean lock;
+        /** 잠긴 메모를 풀지 못했을 때(다른 PC·계정) 받은 암호문을 그대로 보관 */
+        String cipher;
+
         /** 잠긴(암호화된) 메모인지 */
-        boolean locked() { return false; }
+        boolean locked() { return lock; }
+
+        /** 잠겼는데 이 PC·계정에서 풀 수 없는 메모 */
+        boolean unreadable() { return lock && cipher != null; }
     }
 
     // ===================================================================== 본문 마크업
@@ -1348,10 +1356,24 @@ public class QuickMemo {
                         if (m.find()) n.bounds = new Rectangle(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2)),
                                 Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)));
                     }
+                    case "Locked" -> n.lock = "1".equals(v);
                     default -> { }
                 }
             }
+            // 파일 안의 Id 로 저장 경로를 만들므로 형식을 검사 (조작된 파일이 메모 폴더 밖에 쓰지 못하게)
+            String stem = p.getFileName().toString().replaceFirst("\\.note$", "");
+            if (!validNoteId(n.id)) n.id = validNoteId(stem) ? stem : UUID.randomUUID().toString();
+            if (n.lock) {                                            // 잠긴 메모: 본문 복호화 (실패하면 원문을 그대로 보관)
+                n.cipher = n.text;
+                String plain = Crypto.decrypt(dir, n.text);
+                if (plain != null) { n.text = plain; n.cipher = null; }
+                else n.text = "";
+            }
             return n;
+        }
+
+        static boolean validNoteId(String id) {
+            return id != null && id.matches("[0-9A-Za-z][0-9A-Za-z\\-]{0,63}");
         }
 
         void save(Note n) {
@@ -1373,8 +1395,16 @@ public class QuickMemo {
             if (n.favorite) sb.append("Favorite=1\n");
             if (n.shape != NoteShape.Square) sb.append("Shape=").append(n.shape.name()).append('\n');
             if (n.order != null) sb.append("Order=").append(n.order).append('\n');
-            sb.append('\n').append(n.text);
+            String body = n.text;
+            if (n.lock) {
+                sb.append("Locked=1\n");
+                // 풀지 못한 잠긴 메모는 받은 암호문 그대로, 아니면 지금 내용을 암호화. 암호화에 실패하면 저장하지 않음 (평문 유출 방지)
+                body = n.cipher != null ? n.cipher : Crypto.encrypt(dir, n.text);
+                if (body == null) { System.err.println("암호화 실패, 저장 안 함: " + n.id); return; }
+            }
+            sb.append('\n').append(body);
 
+            if (!validNoteId(n.id)) return;
             Path target = notesDir.resolve(n.id + ".note");
             Path tmp = notesDir.resolve(n.id + ".tmp");
             try {
@@ -1399,6 +1429,90 @@ public class QuickMemo {
             if (!validMediaId(id)) return;
             imageCache.remove(id);
             try { Files.deleteIfExists(mediaDir.resolve(id + ".png")); } catch (IOException ignored) { }
+        }
+    }
+
+    /**
+     * 잠긴 메모 암호화. 본문은 AES-256-GCM, 그 키는 Windows DPAPI(현재 사용자)로 보호해 lock.key 에 둔다.
+     * 그래서 메모 파일·백업을 다른 PC 나 다른 Windows 계정으로 가져가면 열 수 없다.
+     * DPAPI 는 PowerShell 로 부르며, 키는 명령줄이 아니라 표준 입력으로 주고받는다 (다른 프로그램이 볼 수 없게).
+     */
+    static final class Crypto {
+        static final String PREFIX = "ENC1:";
+        static byte[] key;
+        static boolean failed;
+
+        /** 키를 읽거나(처음이면 만들어) 메모리에 둔다. 실패하면 null */
+        static synchronized byte[] key(Path dataDir) {
+            if (key != null) return key;
+            if (failed) return null;
+            try {
+                Path f = dataDir.resolve("lock.key");
+                if (Files.exists(f)) {
+                    byte[] k = dpapi(false, Base64.getDecoder().decode(Files.readString(f).trim()));
+                    if (k == null || k.length != 32) { failed = true; return null; }
+                    key = k;
+                } else {
+                    byte[] k = new byte[32];
+                    new java.security.SecureRandom().nextBytes(k);
+                    byte[] prot = dpapi(true, k);
+                    if (prot == null || !Arrays.equals(dpapi(false, prot), k)) { failed = true; return null; }   // 되풀리는지 확인 후 저장
+                    Files.writeString(f, Base64.getEncoder().encodeToString(prot));
+                    key = k;
+                }
+                return key;
+            } catch (Exception e) {
+                failed = true;
+                return null;
+            }
+        }
+
+        static String encrypt(Path dataDir, String plain) {
+            byte[] k = key(dataDir);
+            if (k == null) return null;
+            try {
+                byte[] iv = new byte[12];
+                new java.security.SecureRandom().nextBytes(iv);
+                javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+                c.init(javax.crypto.Cipher.ENCRYPT_MODE, new javax.crypto.spec.SecretKeySpec(k, "AES"), new javax.crypto.spec.GCMParameterSpec(128, iv));
+                byte[] ct = c.doFinal(plain.getBytes(StandardCharsets.UTF_8));
+                byte[] all = new byte[iv.length + ct.length];
+                System.arraycopy(iv, 0, all, 0, iv.length);
+                System.arraycopy(ct, 0, all, iv.length, ct.length);
+                return PREFIX + Base64.getEncoder().encodeToString(all);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        /** 풀 수 없으면(키 없음·다른 계정·변조) null */
+        static String decrypt(Path dataDir, String text) {
+            if (text == null || !text.startsWith(PREFIX)) return null;
+            byte[] k = key(dataDir);
+            if (k == null) return null;
+            try {
+                byte[] all = Base64.getDecoder().decode(text.substring(PREFIX.length()).trim());
+                javax.crypto.Cipher c = javax.crypto.Cipher.getInstance("AES/GCM/NoPadding");
+                c.init(javax.crypto.Cipher.DECRYPT_MODE, new javax.crypto.spec.SecretKeySpec(k, "AES"), new javax.crypto.spec.GCMParameterSpec(128, all, 0, 12));
+                return new String(c.doFinal(all, 12, all.length - 12), StandardCharsets.UTF_8);
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        /** DPAPI 보호/해제. 데이터는 표준 입력·출력(base64)으로만 */
+        static byte[] dpapi(boolean protect, byte[] data) throws Exception {
+            String op = protect ? "Protect" : "Unprotect";
+            String script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; "
+                    + "$b=[Convert]::FromBase64String([Console]::In.ReadToEnd().Trim()); "
+                    + "$r=[Security.Cryptography.ProtectedData]::" + op + "($b,[Text.Encoding]::UTF8.GetBytes('QuickMemo'),'CurrentUser'); "
+                    + "[Console]::Out.Write([Convert]::ToBase64String($r))";
+            Process p = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+                    .redirectError(ProcessBuilder.Redirect.DISCARD).start();
+            try (var out = p.getOutputStream()) { out.write(Base64.getEncoder().encode(data)); }
+            String res = new String(p.getInputStream().readAllBytes(), StandardCharsets.US_ASCII).trim();
+            if (!p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS) || p.exitValue() != 0 || res.isEmpty()) return null;
+            return Base64.getDecoder().decode(res);
         }
     }
 
@@ -1472,6 +1586,7 @@ public class QuickMemo {
 
     /** 글도 그림도 없는 메모 */
     static boolean isEmptyNote(Note n) {
+        if (n.locked()) return false;                                 // 잠긴 메모는(풀지 못해 비어 보여도) 절대 빈 메모로 치지 않음
         return Markup.plain(n.text).isBlank() && Markup.mediaIds(n.text).isEmpty();
     }
 
@@ -1563,6 +1678,14 @@ public class QuickMemo {
                     Shape h = NoteShape.Heart.outline(s * .1, s * .14, s * .8, s * .74);
                     g2.setColor(PINK);
                     g2.fill(h);
+                }
+                case "lock" -> {                                     // 자물쇠
+                    g2.draw(new java.awt.geom.Arc2D.Double(s * .3, s * .1, s * .4, s * .42, 0, 180, java.awt.geom.Arc2D.OPEN));
+                    line(g2, .3, .31, .3, .44);
+                    line(g2, .7, .31, .7, .44);
+                    g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .2, s * .44, s * .6, s * .44, s * .12, s * .12));
+                    dot(g2, .5, .63, .06);
+                    line(g2, .5, .66, .5, .74);
                 }
                 case "tree" -> {                                     // 크리스마스 트리: 3단 초록 + 금별 + 빨간 장식
                     g2.setColor(new Color(0x8B5A2B));
@@ -2294,13 +2417,13 @@ public class QuickMemo {
     static final class PreviewText extends JComponent {
         static final int WRAP = 250;
         final List<String> src;
-        final boolean empty;
+        final String placeholder;                            // "빈 메모"·"잠긴 메모" 처럼 기울여 쓰는 안내 (없으면 null)
         List<String> wrapped;
         Font wrappedFor;
 
-        PreviewText(List<String> src, boolean empty) {
+        PreviewText(List<String> src, String placeholder) {
             this.src = src;
-            this.empty = empty;
+            this.placeholder = placeholder;
             setOpaque(false);
         }
 
@@ -2310,7 +2433,7 @@ public class QuickMemo {
             if (wrapped != null && f.equals(wrappedFor)) return wrapped;
             FontMetrics fm = getFontMetrics(f);
             List<String> out = new ArrayList<>();
-            if (empty) out.add("빈 메모");
+            if (placeholder != null) out.add(placeholder);
             for (String s : src) {
                 if (s.isEmpty()) { out.add(""); continue; }
                 int start = 0;
@@ -2345,7 +2468,7 @@ public class QuickMemo {
             g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
             g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
             Font f = getFont();
-            g2.setFont(empty ? f.deriveFont(Font.ITALIC) : f);
+            g2.setFont(placeholder != null ? f.deriveFont(Font.ITALIC) : f);
             g2.setColor(getForeground());
             FontMetrics fm = g2.getFontMetrics();
             int y = fm.getAscent();
@@ -2892,6 +3015,8 @@ public class QuickMemo {
             content.add(scroll, BorderLayout.CENTER);
             content.add(formatBar, BorderLayout.SOUTH);
             setContentPane(content);
+            if (note.unreadable()) pane.setEditable(false);           // 이 PC 에서 풀 수 없는 잠긴 메모는 고칠 수 없음
+            applyLockView();
             Resizer rz = new Resizer();
             content.addMouseListener(rz);
             content.addMouseMotionListener(rz);
@@ -3145,6 +3270,87 @@ public class QuickMemo {
         }
 
         /** 저장된 순서(설정 formatOrder)대로 서식 버튼 배치. 저장에 없는 버튼은 기본 순서로 뒤에 붙임 */
+        // ---------- 잠금
+        /** 이 창에서 "내용 보기"를 눌렀는지 (창을 닫으면 다시 가려짐) */
+        boolean revealed;
+        JPanel lockCover;
+
+        /** 잠긴 메모는 글 대신 가림판을 보여 준다 */
+        void applyLockView() {
+            boolean cover = note.lock && (!revealed || note.unreadable());
+            if (lockCover != null) content.remove(lockCover);
+            content.remove(scroll);
+            if (cover) {
+                lockCover = buildLockCover();
+                content.add(lockCover, BorderLayout.CENTER);
+            } else {
+                content.add(scroll, BorderLayout.CENTER);
+            }
+            formatBar.setVisible(!cover);
+            content.revalidate();
+            content.repaint();
+        }
+
+        JPanel buildLockCover() {
+            Theme t = note.theme;
+            JPanel p = new JPanel(new GridBagLayout());
+            p.setOpaque(false);
+            JPanel col = new JPanel();
+            col.setOpaque(false);
+            col.setLayout(new BoxLayout(col, BoxLayout.Y_AXIS));
+            JLabel ic = new JLabel(new Glyph("lock", 30));
+            ic.setForeground(t.fg());
+            ic.setAlignmentX(Component.CENTER_ALIGNMENT);
+            col.add(ic);
+            col.add(Box.createVerticalStrut(8));
+            JLabel l = new JLabel(note.unreadable() ? "이 PC에서 열 수 없는 잠긴 메모" : "잠긴 메모");
+            l.setFont(BASE_FONT.deriveFont(Font.BOLD, 14f));
+            l.setForeground(t.fg());
+            l.setAlignmentX(Component.CENTER_ALIGNMENT);
+            col.add(l);
+            if (!note.unreadable()) {
+                col.add(Box.createVerticalStrut(10));
+                JButton show = pill(new JButton("내용 보기"));
+                show.setAlignmentX(Component.CENTER_ALIGNMENT);
+                show.addActionListener(e -> { revealed = true; applyLockView(); pane.requestFocusInWindow(); });
+                col.add(show);
+            } else {
+                JLabel d = new JLabel("다른 PC나 다른 Windows 계정에서 잠근 메모예요");
+                d.setFont(BASE_FONT.deriveFont(12f));
+                d.setForeground(new Color(t.fg().getRed(), t.fg().getGreen(), t.fg().getBlue(), 150));
+                d.setAlignmentX(Component.CENTER_ALIGNMENT);
+                col.add(Box.createVerticalStrut(4));
+                col.add(d);
+            }
+            p.add(col);
+            return p;
+        }
+
+        /** 메뉴의 "메모 잠그기 / 잠금 풀기" */
+        void toggleLock() {
+            if (note.unreadable()) return;
+            if (!note.lock) {
+                setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+                byte[] k = Crypto.key(app.store.dir);                   // 처음이면 키를 만든다 (1초 안쪽)
+                setCursor(Cursor.getDefaultCursor());
+                if (k == null) {
+                    Ask.notice(this, Ask.Kind.WARN, "메모를 잠그지 못했어요", "이 PC에서 Windows 암호화 기능을 쓸 수 없어요.");
+                    return;
+                }
+                flush();
+                note.lock = true;
+                revealed = false;
+            } else {
+                if (!Ask.confirm(this, Ask.Kind.QUESTION, "잠금을 풀까요?", "이 메모는 암호화되지 않은 채로 저장돼요.", "잠금 풀기", "취소")) return;
+                flush();
+                note.lock = false;
+            }
+            note.updatedAt = nowTicks();
+            app.store.save(note);
+            applyLockView();
+            app.noteChanged();
+        }
+
         void applyFormatOrder() {
             List<String> order = new ArrayList<>();
             for (String id : app.store.settings.getProperty("formatOrder", "").split(","))
@@ -3448,6 +3654,8 @@ public class QuickMemo {
                 top.active = note.onTop;
                 root.add(top);
                 root.add(item("list", "메모 목록", () -> { dispose(); app.showList(); }));
+                if (!note.unreadable())
+                    root.add(item("lock", note.lock ? "잠금 풀기" : "메모 잠그기", () -> { dispose(); toggleLock(); }));
                 root.add(item("trash", "메모 삭제", () -> { dispose(); app.deleteNote(note, NoteWindow.this); }));
 
                 setContentPane(root);
@@ -4243,10 +4451,10 @@ public class QuickMemo {
             Set<String> alive = new HashSet<>();
             for (Note n : app.activeNotes()) {
                 alive.add(n.id);
-                String stamp = n.updatedAt + "/" + n.favorite + "/" + n.shape + "/" + n.theme + "/" + n.open + "/" + when(n.updatedAt);
+                String stamp = n.updatedAt + "/" + n.favorite + "/" + n.shape + "/" + n.theme + "/" + n.open + "/" + n.lock + "/" + when(n.updatedAt);
                 Card c = cardCache.get(n.id);
                 if (c == null || !stamp.equals(c.stamp)) {
-                    c = new Card(n, Markup.plain(n.text));
+                    c = new Card(n, n.locked() ? "" : Markup.plain(n.text));   // 잠긴 메모는 미리보기·검색에서 내용을 숨김
                     c.stamp = stamp;
                     cardCache.put(n.id, c);
                 } else {
@@ -4819,12 +5027,12 @@ public class QuickMemo {
                 for (int i = 0; i < Math.min(lines.length, 6); i++)
                     src.add(lines[i].length() > 120 ? lines[i].substring(0, 120) + "…" : lines[i]);
                 if (lines.length > 6) src.add("…");
-                body = new PreviewText(src, plain.isBlank() && media.isEmpty());
+                body = new PreviewText(note.locked() ? List.of() : src, note.locked() ? "잠긴 메모" : plain.isBlank() && media.isEmpty() ? "빈 메모" : null);
                 body.setFont(BASE_FONT.deriveFont(13f));
 
                 add(head, BorderLayout.NORTH);
                 add(body, BorderLayout.CENTER);
-                java.awt.image.BufferedImage thumb = media.isEmpty() ? null : app.store.loadImage(media.get(0));
+                java.awt.image.BufferedImage thumb = media.isEmpty() || note.locked() ? null : app.store.loadImage(media.get(0));
                 if (thumb != null) {
                     pic = new JLabel(new ScaledImageIcon(thumb, 250, 140));
                     pic.setHorizontalAlignment(SwingConstants.LEFT);
