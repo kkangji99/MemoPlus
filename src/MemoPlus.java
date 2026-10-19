@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public class MemoPlus {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.1.0";
+    static final String VERSION = "1.1.1";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/MemoPlus";
     /** 이름을 바꾸기 전 저장소 (그때 올린 릴리스 주소도 믿는다) */
@@ -3487,6 +3487,7 @@ public class MemoPlus {
             if (help == null || !help.isDisplayable()) help = new HelpDialog();
             help.setVisible(true);
             help.toFront();
+            help.find.requestFocusInWindow();                        // 다시 눌러도 바로 찾을 수 있게
         }
 
         /** 사용설명서: 설정 창과 같은 모양(카드·색)으로 기능과 단축키를 보여 준다 */
@@ -3494,8 +3495,65 @@ public class MemoPlus {
             HelpDialog() { super("사용설명서"); }
 
             @Override
+            String findHint() { return "설명서에서 찾기 (예: 알림, 단축키, 잠금)"; }
+
+            /** 설명서 내용: {구역 이름, {{항목, 설명}, ...}} */
+            Object[][] content() {
+                return new Object[][]{
+                        {"시작하기", new String[][]{
+                                {"새 메모", "목록의 + 버튼이나 Ctrl+N. 어디서든 Ctrl+Alt+M (설정 → 실행에서 켜기)"},
+                                {"메모 목록", "모든 메모를 카드로 보여요. 누르면 메모가 열려요"},
+                                {"찾기", "목록 위 찾기 칸에 글자를 쓰면 바로 걸러져요. 열면 찾은 글자가 노랗게 표시돼요"},
+                                {"설정 · 설명서 찾기", "설정과 사용설명서 위쪽 찾기 칸에서 항목을 바로 찾아요 (Ctrl+F, Esc 로 지우기)"},
+                                {"자동 저장", "쓰는 대로 저장돼요. 아무것도 쓰지 않은 새 메모는 남기지 않아요"}}},
+                        {"꾸미기", new String[][]{
+                                {"색깔 · 모양", "메모 위쪽 … 버튼(메뉴)에서 색깔과 스티커 모양(동그라미·하트·별 등)을 골라요"},
+                                {"디자인", "설정에서 심플·아기자기·크리스마스·봄·여름·가을·겨울 중에 골라요"},
+                                {"추천 디자인으로 변경", "켜 두면 새 디자인이 나오거나 계절이 바뀔 때 알아서 바꿔요"},
+                                {"밝기 · 글자 크기", "설정 → 화면 모드에서 밝게·어둡게·시스템, 글자 크기를 바꿔요"}}},
+                        {"글쓰기", new String[][]{
+                                {"서식", "굵게 Ctrl+B, 기울임 Ctrl+I, 밑줄 Ctrl+U, 취소선 Ctrl+T"},
+                                {"목록 · 할 일", "글머리 기호 Ctrl+Shift+L, 할 일 체크 Ctrl+Shift+C. Tab 으로 들여쓰기, Shift+Tab 으로 내어쓰기"},
+                                {"그림", "복사한 그림을 Ctrl+V 로 붙여 넣거나 그림 버튼으로 넣어요"},
+                                {"링크", "http 주소에는 밑줄이 생겨요. Ctrl+클릭하면 브라우저로 열려요"},
+                                {"서식 버튼 순서", "서식 버튼을 끌어서 원하는 순서로 바꿔요"}}},
+                        {"정리하기", new String[][]{
+                                {"즐겨찾기", "카드의 별을 누르면 목록 맨 위에 고정돼요"},
+                                {"순서 바꾸기", "카드를 끌어서 순서를 바꿔요"},
+                                {"여러 개 지우기", "목록의 휴지통 버튼 → 고르기 → 삭제. 전체 선택도 돼요"},
+                                {"휴지통", "지운 메모는 " + App.TRASH_DAYS + "일 동안 설정 → 휴지통에서 되살릴 수 있어요. 지운 직후에는 '되돌리기'"}}},
+                        {"편하게 쓰기", new String[][]{
+                                {"알림", "메모 … 메뉴 → 알림 설정. 그 시각에 메모가 앞으로 떠요"},
+                                {"알림 영역 · 자동 실행", "창을 다 닫아도 작업 표시줄 옆 아이콘으로 계속 실행. Windows 시작 시 실행도 돼요"},
+                                {"Windows 스티커 메모", "설정 → 가져오기에서 스티커 메모를 그대로 가져와요"}}},
+                        {"지키기", new String[][]{
+                                {"메모 잠금", "메모 … 메뉴 → 메모 잠그기. 암호화해서 저장하고 목록에서 내용을 가려요"},
+                                {"백업", "하루 한 번 자동 백업(최근 7개). 설정 → 백업에서 내보내기·가져오기"},
+                                {"업데이트", "새 버전이 나오면 알아서 받아요. 메모는 그대로 남아요"}}},
+                        {"단축키 모음", new String[][]{
+                                {"새 메모", "Ctrl+N · 어디서든 Ctrl+Alt+M"},
+                                {"메모 닫기 · 지우기", "Ctrl+W 닫기, Ctrl+D 휴지통으로"},
+                                {"되돌리기 · 다시 하기", "Ctrl+Z, Ctrl+Y"},
+                                {"서식", "Ctrl+B 굵게, Ctrl+I 기울임, Ctrl+U 밑줄, Ctrl+T 취소선"},
+                                {"목록 · 할 일", "Ctrl+Shift+L 글머리 기호, Ctrl+Shift+C 할 일, Tab · Shift+Tab 들여쓰기"},
+                                {"찾기", "메모에서 Ctrl+F 는 메모 목록, 목록·설정·설명서에서 Ctrl+F 는 찾기 칸"},
+                                {"닫기", "Esc 로 메뉴·설정·설명서 닫기"}}}};
+            }
+
+            @Override
             void fill(JPanel page) {
-                // 머리: 아이콘 · 이름 · 슬로건 · 버전
+                JComponent head = helpHead();
+                page.add(head);
+                hideWhileFinding.add(head);                            // 찾는 중에는 결과를 바로 위에
+                for (Object[] sec : content()) {
+                    List<JComponent> rows = new ArrayList<>();
+                    for (String[] r : (String[][]) sec[1]) rows.add(row(r[0], r[1], null));
+                    page.add(section((String) sec[0], rows.toArray(new JComponent[0])));
+                }
+            }
+
+            /** 머리: 아이콘 · 이름 · 슬로건 · 버전 */
+            JComponent helpHead() {
                 JLabel name = new JLabel(APP_NAME + " (" + APP_NAME_EN + ")", new ImageIcon(appIcon(44, Theme.Yellow)), SwingConstants.LEFT);
                 name.setFont(BASE_FONT.deriveFont(Font.BOLD, 18f));
                 name.setForeground(text());
@@ -3513,37 +3571,7 @@ public class MemoPlus {
                 slogan.setAlignmentX(LEFT_ALIGNMENT);
                 head.add(name);
                 head.add(slogan);
-                page.add(head);
-
-                page.add(section("시작하기",
-                        row("새 메모", "목록의 + 버튼이나 Ctrl+N. 어디서든 Ctrl+Alt+M (설정 → 실행에서 켜기)", null),
-                        row("메모 목록", "모든 메모를 카드로 보여요. 누르면 메모가 열려요", null),
-                        row("찾기", "목록 위 찾기 칸에 글자를 쓰면 바로 걸러져요. 열면 찾은 글자가 노랗게 표시돼요", null),
-                        row("자동 저장", "쓰는 대로 저장돼요. 아무것도 쓰지 않은 새 메모는 남기지 않아요", null)));
-                page.add(section("꾸미기",
-                        row("색깔 · 모양", "메모 위쪽 … 버튼(메뉴)에서 색깔과 스티커 모양(동그라미·하트·별 등)을 골라요", null),
-                        row("디자인", "설정에서 심플·아기자기·크리스마스·봄·여름·가을·겨울 중에 골라요", null),
-                        row("추천 디자인으로 변경", "켜 두면 새 디자인이 나오거나 계절이 바뀔 때 알아서 바꿔요", null),
-                        row("밝기 · 글자 크기", "설정 → 화면 모드에서 밝게·어둡게·시스템, 글자 크기를 바꿔요", null)));
-                page.add(section("글쓰기",
-                        row("서식", "굵게 Ctrl+B, 기울임 Ctrl+I, 밑줄 Ctrl+U, 취소선 Ctrl+T", null),
-                        row("목록 · 할 일", "글머리 기호 Ctrl+Shift+L, 할 일 체크 Ctrl+Shift+C. Tab 으로 들여쓰기, Shift+Tab 으로 내어쓰기", null),
-                        row("그림", "복사한 그림을 Ctrl+V 로 붙여 넣거나 그림 버튼으로 넣어요", null),
-                        row("링크", "http 주소에는 밑줄이 생겨요. Ctrl+클릭하면 브라우저로 열려요", null),
-                        row("서식 버튼 순서", "서식 버튼을 끌어서 원하는 순서로 바꿔요", null)));
-                page.add(section("정리하기",
-                        row("즐겨찾기", "카드의 별을 누르면 목록 맨 위에 고정돼요", null),
-                        row("순서 바꾸기", "카드를 끌어서 순서를 바꿔요", null),
-                        row("여러 개 지우기", "목록의 휴지통 버튼 → 고르기 → 삭제. 전체 선택도 돼요", null),
-                        row("휴지통", "지운 메모는 " + App.TRASH_DAYS + "일 동안 설정 → 휴지통에서 되살릴 수 있어요. 지운 직후에는 '되돌리기'", null)));
-                page.add(section("편하게 쓰기",
-                        row("알림", "메모 … 메뉴 → 알림 설정. 그 시각에 메모가 앞으로 떠요", null),
-                        row("알림 영역 · 자동 실행", "창을 다 닫아도 작업 표시줄 옆 아이콘으로 계속 실행. Windows 시작 시 실행도 돼요", null),
-                        row("Windows 스티커 메모", "설정 → 가져오기에서 스티커 메모를 그대로 가져와요", null)));
-                page.add(section("지키기",
-                        row("메모 잠금", "메모 … 메뉴 → 메모 잠그기. 암호화해서 저장하고 목록에서 내용을 가려요", null),
-                        row("백업", "하루 한 번 자동 백업(최근 7개). 설정 → 백업에서 내보내기·가져오기", null),
-                        row("업데이트", "새 버전이 나오면 알아서 받아요. 메모는 그대로 남아요", null)));
+                return head;
             }
         }
 
@@ -3558,7 +3586,27 @@ public class MemoPlus {
                 setLocationRelativeTo(NotesListWindow.this);
                 NoteWindow.bind(getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), getRootPane().getActionMap(),
                         KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close", this::dispose);
+                NoteWindow.bind(getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), getRootPane().getActionMap(),
+                        KeyStroke.getKeyStroke(KeyEvent.VK_F, InputEvent.CTRL_DOWN_MASK), "find", () -> find.requestFocusInWindow());
+                addWindowListener(new WindowAdapter() {
+                    public void windowOpened(WindowEvent e) { find.requestFocusInWindow(); }   // 열면 바로 찾을 수 있게
+                });
             }
+
+            // ---------- 찾기: 구역·줄을 다시 만들지 않고 보이기/숨기기만 (토글·버튼 상태 그대로, 빠름)
+            /** 찾는 글자 (테마를 바꿔 창을 다시 만들어도 유지) */
+            String query = "";
+            JTextField find;
+            JPanel page;
+            JLabel noResult;
+            /** 이번에 만든 구역들: {묶음, 구역 이름, 줄[], 줄마다 앞 구분선[]} */
+            final List<Object[]> findSections = new ArrayList<>();
+            /** 찾는 중에는 숨길 것 (사용설명서 머리 등) */
+            final List<Component> hideWhileFinding = new ArrayList<>();
+            /** fill() 중에만 구역을 모은다 (휴지통 창이 같은 section() 을 써도 섞이지 않게) */
+            boolean collecting;
+
+            String findHint() { return "설정에서 찾기 (예: 밝기, 백업, 알림)"; }
 
             boolean dark() { return app.store.darkMode(); }
             Color accent() { return cute() ? styleAccent() : dark() ? new Color(0x4CC2FF) : new Color(0x0067C0); }
@@ -3586,8 +3634,100 @@ public class MemoPlus {
                 page.setBackground(pageBg());
                 blendTitleBar(getRootPane(), pageBg(), text());
                 page.setBorder(new EmptyBorder(16, 18, 16, 18));
-                fill(page);
+                this.page = page;
+                findSections.clear();
+                hideWhileFinding.clear();
+                collecting = true;
+                try { fill(page); } finally { collecting = false; }
                 finish(page);
+            }
+
+            /** 찾기 칸은 스크롤과 상관없이 위쪽에 고정 */
+            JComponent findBar() {
+                find = new JTextField(query);
+                find.putClientProperty("JTextField.placeholderText", findHint());
+                find.putClientProperty("JTextField.leadingIcon", new Glyph("search", 16));
+                find.putClientProperty("JTextField.showClearButton", true);
+                find.setFont(BASE_FONT);
+                find.setBackground(cardBg());
+                find.setForeground(text());
+                find.setCaretColor(text());
+                find.getDocument().addDocumentListener(new DocumentListener() {
+                    public void insertUpdate(DocumentEvent e) { query = find.getText(); applyFind(true); }
+                    public void removeUpdate(DocumentEvent e) { query = find.getText(); applyFind(true); }
+                    public void changedUpdate(DocumentEvent e) { }
+                });
+                NoteWindow.bind(find.getInputMap(), find.getActionMap(), KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "clearOrClose",
+                        () -> { if (find.getText().isEmpty()) dispose(); else find.setText(""); });   // Esc: 먼저 지우고, 비어 있으면 닫기
+                JPanel top = new JPanel(new BorderLayout());
+                top.setBackground(pageBg());
+                top.setBorder(new EmptyBorder(14, 18, 4, 18));
+                top.add(find);
+                return top;
+            }
+
+            /**
+             * 찾는 글자에 맞는 줄만 보이기. 구역 이름이 맞으면 구역 전체, 설명 글의 찾은 글자는 노랗게.
+             * 숨긴 줄 앞의 구분선도 숨기고, 맞는 게 없으면 안내 한 줄.
+             */
+            void applyFind(boolean scrollTop) {
+                String q = query == null ? "" : query.trim().toLowerCase();
+                for (Component c : hideWhileFinding) c.setVisible(q.isEmpty());
+                int shown = 0;
+                for (Object[] s : findSections) {
+                    JComponent wrap = (JComponent) s[0];
+                    String title = (String) s[1];
+                    JComponent[] rows = (JComponent[]) s[2];
+                    Component[][] seps = (Component[][]) s[3];
+                    boolean secHit = q.isEmpty() || title != null && title.toLowerCase().contains(q);
+                    boolean before = false;
+                    for (int i = 0; i < rows.length; i++) {
+                        boolean v = secHit || textOf(rows[i]).toLowerCase().contains(q);
+                        rows[i].setVisible(v);
+                        if (seps[i] != null) for (Component c : seps[i]) c.setVisible(v && before);
+                        if (v) { before = true; shown++; }
+                        markFound(rows[i], q.isEmpty() ? null : q);
+                    }
+                    wrap.setVisible(before);
+                    wrap.setMaximumSize(null);                               // 줄을 숨긴 만큼 줄어들게
+                    wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, wrap.getPreferredSize().height));
+                }
+                if (noResult != null) page.remove(noResult);
+                noResult = null;
+                if (shown == 0 && !q.isEmpty()) {
+                    noResult = new JLabel("'" + query.trim() + "' 에 맞는 항목이 없어요");
+                    noResult.setFont(BASE_FONT.deriveFont(13f));
+                    noResult.setForeground(sub());
+                    noResult.setBorder(new EmptyBorder(24, 4, 0, 0));
+                    noResult.setAlignmentX(LEFT_ALIGNMENT);
+                    page.add(noResult);
+                }
+                page.revalidate();
+                page.repaint();
+                if (scrollTop && page.getParent() instanceof JViewport vp) vp.setViewPosition(new Point(0, 0));
+            }
+
+            /** 줄 안의 글자 모두 (제목·설명·버튼·선택 상자·디자인 카드 이름) */
+            String textOf(Component c) {
+                StringBuilder sb = new StringBuilder();
+                collectText(c, sb);
+                return sb.toString();
+            }
+
+            void collectText(Component c, StringBuilder sb) {
+                if (c instanceof JLabel l && l.getText() != null) sb.append(l.getText()).append(' ');
+                else if (c instanceof AbstractButton b && b.getText() != null) sb.append(b.getText()).append(' ');
+                else if (c instanceof PreviewText p) sb.append(String.join(" ", p.src)).append(' ');
+                else if (c instanceof StyleCard sc) sb.append(sc.name).append(' ').append(sc.desc).append(' ');
+                else if (c instanceof Segmented sg) sb.append(String.join(" ", sg.items)).append(' ');
+                if (c instanceof Container cc) for (Component k : cc.getComponents()) collectText(k, sb);
+            }
+
+            void markFound(Container c, String q) {
+                for (Component k : c.getComponents()) {
+                    if (k instanceof PreviewText p) p.setQuery(q);
+                    else if (k instanceof Container cc) markFound(cc, q);
+                }
             }
 
             /** 창 내용 (사용설명서 창은 이것만 바꾼다) */
@@ -3597,7 +3737,7 @@ public class MemoPlus {
                 styles.setOpaque(false);
                 for (Style s : Style.values()) styles.add(new StyleCard(s, s.label, s.desc));
                 Style pick = Style.recommended(LocalDate.now());
-                page.add(section("디자인", styles, row("추천 디자인으로 변경", "새 디자인이나 계절에 맞춰 바꿔요 (지금: " + pick.label + ")",
+                page.add(section("디자인", styles, row("추천 디자인으로 변경", "새 디자인이나 계절에 맞춰 바꿔요\n(지금: " + pick.label + ")",
                         new ToggleSwitch(app.store.autoSeason(), on -> { app.setAutoSeason(on); rebuild(); }))));
 
                 // 화면
@@ -3704,9 +3844,11 @@ public class MemoPlus {
                 getRootPane().setDefaultButton(close);
 
                 JPanel root = new JPanel(new BorderLayout());
+                root.add(findBar(), BorderLayout.NORTH);
                 root.add(sp, BorderLayout.CENTER);
                 root.add(bottom, BorderLayout.SOUTH);
                 setContentPane(root);
+                if (!query.isBlank()) applyFind(false);                   // 테마를 바꿔 다시 만들어도 찾던 결과 그대로
             }
 
             void rebuild() {
@@ -3744,14 +3886,14 @@ public class MemoPlus {
                 card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
                 card.setBorder(new EmptyBorder(12, 14, 12, 14));
                 card.setAlignmentX(LEFT_ALIGNMENT);
+                Component[][] seps = new Component[rows.length][];
                 for (int i = 0; i < rows.length; i++) {
                     if (i > 0) {
                         JSeparator s = new JSeparator();
                         s.setForeground(dark() ? new Color(255, 255, 255, 20) : new Color(0, 0, 0, 18));
                         s.setMaximumSize(new Dimension(Integer.MAX_VALUE, 1));
-                        card.add(Box.createVerticalStrut(10));
-                        card.add(s);
-                        card.add(Box.createVerticalStrut(10));
+                        seps[i] = new Component[]{Box.createVerticalStrut(10), s, Box.createVerticalStrut(10)};
+                        for (Component c : seps[i]) card.add(c);
                     }
                     rows[i].setAlignmentX(LEFT_ALIGNMENT);
                     card.add(rows[i]);
@@ -3759,6 +3901,7 @@ public class MemoPlus {
                 wrap.add(card);
                 wrap.add(Box.createVerticalStrut(10));
                 wrap.setMaximumSize(new Dimension(Integer.MAX_VALUE, wrap.getPreferredSize().height));
+                if (collecting) findSections.add(new Object[]{wrap, title, rows, seps});   // 찾기에서 보이기/숨기기
                 return wrap;
             }
 
@@ -3771,7 +3914,7 @@ public class MemoPlus {
                 labels.setOpaque(false);
                 JLabel t = new JLabel(title);
                 t.setForeground(text());
-                PreviewText d = new PreviewText(List.of(desc == null ? "" : desc), null);   // HTML JLabel 은 만들 때마다 HTML 을 해석해 설정 창 다시 만들기가 느려짐
+                PreviewText d = new PreviewText(List.of((desc == null ? "" : desc).split("\n")), null);   // HTML JLabel 은 만들 때마다 HTML 을 해석해 설정 창 다시 만들기가 느려짐. \n 은 줄바꿈
                 d.wrap = right == null ? 380 : 240;                   // 오른쪽 버튼이 없으면 카드 폭만큼
                 d.fit = true;
                 d.setAlignmentX(LEFT_ALIGNMENT);
