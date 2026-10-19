@@ -31,8 +31,12 @@ import java.util.regex.Pattern;
  * 제거는 앱 파일(MemoPlus.exe, app, runtime)만 지우고 메모(%APPDATA%\MemoPlus)는 남긴다.
  */
 final class Installer {
-    /** 테스트에서 실제 레지스트리를 건드리지 않게 바꿀 수 있음 */
-    static final String KEY = System.getProperty("memoplus.uninstallKey", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MemoPlus");
+    /** 테스트에서 실제 레지스트리를 건드리지 않게 바꿀 수 있음 (exe 시험은 환경 변수로). HKCU\Software 아래만 */
+    static final String KEY = testKey(Optional.ofNullable(System.getProperty("memoplus.uninstallKey")).orElse(System.getenv("MEMOPLUS_UNINSTALL_KEY")));
+
+    static String testKey(String k) {
+        return k != null && k.startsWith("HKCU\\Software\\") && !k.contains("..") ? k : "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MemoPlus";
+    }
     /**
      * jpackage app-image 의 내용. 제거할 때 이것만 지운다 (다른 파일이 있는 폴더를 통째로 지우지 않게).
      * QuickMemo.exe 는 1.0.x 의 업데이터가 새 버전을 찾을 수 있게 같이 넣는 예전 이름의 실행 파일

@@ -25,7 +25,8 @@ $flatlaf = "$PWD\lib\flatlaf-3.5.4.jar"     # modern look and feel, bundled into
 javac -encoding UTF-8 -cp $flatlaf -d build\classes (Get-ChildItem build\src\*.java | ForEach-Object FullName)
 if ($LASTEXITCODE) { throw 'javac failed' }
 # global hotkey: JDK 21 foreign function API (preview), compiled on its own; the app runs with --enable-preview
-javac --release 21 --enable-preview -encoding UTF-8 -d build\classes src\hotkey\MemoPlusHotkey.java 2>$null
+# (through cmd: javac prints a preview-feature note on stderr, which PowerShell 5 treats as an error under 'Stop')
+cmd /c "javac --release 21 --enable-preview -encoding UTF-8 -d build\classes src\hotkey\MemoPlusHotkey.java 2>nul"
 if ($LASTEXITCODE) { throw 'javac hotkey failed' }
 Push-Location build\classes; jar xf $flatlaf; Pop-Location
 if ($LASTEXITCODE) { throw 'flatlaf extract failed' }

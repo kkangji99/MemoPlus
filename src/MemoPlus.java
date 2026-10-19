@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public class MemoPlus {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.17";
+    static final String VERSION = "1.1.0";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/MemoPlus";
     /** 이름을 바꾸기 전 저장소 (그때 올린 릴리스 주소도 믿는다) */
