@@ -42,6 +42,7 @@ public class QuickMemo {
             Properties p = new Properties();
             p.load(r);
             dark = Boolean.parseBoolean(p.getProperty("darkMode", "false"));
+            if (Boolean.parseBoolean(p.getProperty("followSystemTheme", "false"))) dark = App.systemDark();
         } catch (IOException ignored) { }
         boolean d = dark;
         SwingUtilities.invokeAndWait(() -> setupLaf(d));
@@ -1306,6 +1307,12 @@ public class QuickMemo {
         boolean confirmDelete() { return Boolean.parseBoolean(settings.getProperty("confirmDelete", "true")); }
         /** 계절에 맞춰 디자인 자동 변경 (기본 꺼짐) */
         boolean autoSeason() { return Boolean.parseBoolean(settings.getProperty("autoSeason", "false")); }
+        /** 메모 글자 크기 (기본 14) */
+        int fontSize() {
+            try { return Math.max(11, Math.min(24, Integer.parseInt(settings.getProperty("fontSize", "14")))); } catch (NumberFormatException e) { return 14; }
+        }
+        /** 밝게/어둡게를 Windows 설정에 맞춤 */
+        boolean followSystemTheme() { return Boolean.parseBoolean(settings.getProperty("followSystemTheme", "false")); }
         Theme defaultTheme() { return Theme.parse(settings.getProperty("defaultNoteColor", "Yellow")); }
 
         void set(String k, String v) {
@@ -2622,11 +2629,30 @@ public class QuickMemo {
             g2.setColor(getForeground());
             FontMetrics fm = g2.getFontMetrics();
             int y = fm.getAscent();
+            String ql = query == null || query.isBlank() ? null : query.toLowerCase();
             for (String l : lines()) {
+                if (ql != null && placeholder == null) {             // 찾는 글자 노란 표시
+                    String low = l.toLowerCase();
+                    for (int i = low.indexOf(ql); i >= 0; i = low.indexOf(ql, i + ql.length())) {
+                        int x0 = fm.stringWidth(l.substring(0, i)), w = fm.stringWidth(l.substring(i, i + ql.length()));
+                        g2.setColor(new Color(255, 214, 0, 150));
+                        g2.fillRoundRect(x0 - 1, y - fm.getAscent(), w + 2, fm.getHeight(), 4, 4);
+                    }
+                    g2.setColor(getForeground());
+                }
                 g2.drawString(l, 0, y);
                 y += fm.getHeight();
             }
             g2.dispose();
+        }
+
+        /** 메모 목록에서 찾는 글자 (없으면 null) */
+        String query;
+
+        void setQuery(String q) {
+            if (Objects.equals(q, query)) return;
+            query = q;
+            repaint();
         }
     }
 
@@ -2730,6 +2756,7 @@ public class QuickMemo {
             Backup.daily(store);                                     // 하루 한 번 자동 백업 (켜 둔 채 날이 바뀌면 다음 날도)
             if (trayEnabled()) setTray(true);
             if (hotkeyEnabled()) setHotkey(true);
+            new javax.swing.Timer(60 * 1000, e -> { if (store.followSystemTheme()) syncSystemTheme(); }).start();
             new javax.swing.Timer(6 * 60 * 60 * 1000, e -> Backup.daily(store)).start();
 
             int opened = 0;
@@ -3107,6 +3134,49 @@ public class QuickMemo {
             list.applyMode();
         }
 
+        /** 메모 글자 크기를 바꾸고 열린 메모에 바로 적용 */
+        void setFontSize(int size) {
+            store.set("fontSize", String.valueOf(size));
+            for (NoteWindow w : windows.values()) {
+                w.pane.setFont(BASE_FONT.deriveFont((float) size));
+                w.pane.revalidate();
+                w.pane.repaint();
+            }
+        }
+
+        /** Windows 가 어둡게(앱 모드)인지: 레지스트리 AppsUseLightTheme 가 0 이면 어둡게 */
+        static boolean systemDark() {
+            try {
+                Process p = new ProcessBuilder("reg", "query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                        "/v", "AppsUseLightTheme").redirectErrorStream(true).start();
+                String out = new String(p.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+                p.waitFor(5, java.util.concurrent.TimeUnit.SECONDS);
+                return out.matches("(?s).*AppsUseLightTheme\\s+REG_DWORD\\s+0x0\\b.*");
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        /** "시스템" 모드: Windows 설정을 따라 밝게/어둡게 (1분마다 확인, 확인은 백그라운드) */
+        void followSystemTheme(boolean on) {
+            store.set("followSystemTheme", String.valueOf(on));
+            if (on) syncSystemTheme();
+        }
+
+        void syncSystemTheme() {
+            Thread t = new Thread(() -> {
+                boolean d = systemDark();
+                SwingUtilities.invokeLater(() -> {
+                    if (store.followSystemTheme() && d != store.darkMode()) {
+                        setDark(d);
+                        if (list.settings != null && list.settings.isShowing()) list.settings.rebuild();
+                    }
+                });
+            }, "theme-check");
+            t.setDaemon(true);
+            t.start();
+        }
+
         /** 지금 써야 할 디자인: 자동 변경이 켜져 있으면 계절 추천, 아니면 직접 고른 것 */
         Style chosenStyle() {
             return store.autoSeason() ? Style.forSeason(LocalDate.now())
@@ -3246,7 +3316,7 @@ public class QuickMemo {
                     }
                 }
             };
-            pane.setFont(BASE_FONT);
+            pane.setFont(BASE_FONT.deriveFont((float) app.store.fontSize()));   // 설정의 글자 크기
             pane.setBorder(new EmptyBorder(6, 12, 6, 10));
             pane.setOpaque(false);                         // 스티커 모양(ShapePanel)이 배경을 그림
             doc = pane.getStyledDocument();
@@ -3292,6 +3362,24 @@ public class QuickMemo {
 
             saveTimer = new javax.swing.Timer(500, e -> flush());
             saveTimer.setRepeats(false);
+            linkTimer = new javax.swing.Timer(400, e -> refreshLinks());
+            linkTimer.setRepeats(false);
+            refreshLinks();
+            MouseAdapter links = new MouseAdapter() {
+                public void mouseClicked(MouseEvent e) {
+                    if (!SwingUtilities.isLeftMouseButton(e) || !e.isControlDown()) return;
+                    String u = linkAt(e.getPoint());
+                    if (u != null) { e.consume(); openLink(u); }
+                }
+
+                public void mouseMoved(MouseEvent e) {
+                    String u = e.isControlDown() ? linkAt(e.getPoint()) : null;
+                    pane.setCursor(Cursor.getPredefinedCursor(u != null ? Cursor.HAND_CURSOR : Cursor.TEXT_CURSOR));
+                    pane.setToolTipText(u == null && linkAt(e.getPoint()) != null ? "Ctrl+클릭하면 열려요" : null);
+                }
+            };
+            pane.addMouseListener(links);
+            pane.addMouseMotionListener(links);
             doc.addDocumentListener(new DocumentListener() {
                 public void insertUpdate(DocumentEvent e) { textChanged(); }
                 public void removeUpdate(DocumentEvent e) { textChanged(); }
@@ -3532,6 +3620,114 @@ public class QuickMemo {
         }
 
         /** 저장된 순서(설정 formatOrder)대로 서식 버튼 배치. 저장에 없는 버튼은 기본 순서로 뒤에 붙임 */
+        // ---------- 링크 (Ctrl+클릭으로 열기) · 찾은 글자 표시
+        static final Pattern URL = Pattern.compile("https?://[^\\s<>\"'\\u3000]{1,2000}");
+        final List<Object> linkTags = new ArrayList<>(), findTags = new ArrayList<>();
+        javax.swing.Timer linkTimer;
+
+        /** 링크에 밑줄 (글이 바뀌면 잠시 뒤 다시 찾음) */
+        void refreshLinks() {
+            javax.swing.text.Highlighter h = pane.getHighlighter();
+            for (Object t : linkTags) h.removeHighlight(t);
+            linkTags.clear();
+            String s;
+            try { s = doc.getText(0, doc.getLength()); } catch (BadLocationException e) { return; }
+            Matcher m = URL.matcher(s);
+            Color c = note.theme.dark ? new Color(0x8CC8FF) : new Color(0x1F6FD1);
+            while (m.find()) {
+                int end = trimUrlEnd(s, m.start(), m.end());
+                try { linkTags.add(h.addHighlight(m.start(), end, new UnderlinePainter(c))); } catch (BadLocationException ignored) { }
+            }
+        }
+
+        /** 문장 끝 마침표·괄호는 주소에서 뺀다 */
+        static int trimUrlEnd(String s, int start, int end) {
+            while (end > start && ".,;:!?)]}".indexOf(s.charAt(end - 1)) >= 0) end--;
+            return end;
+        }
+
+        /** 이 위치에 링크가 있으면 그 주소 */
+        String linkAt(Point p) {
+            int pos = pane.viewToModel2D(p);
+            if (pos < 0) return null;
+            String s;
+            try { s = doc.getText(0, doc.getLength()); } catch (BadLocationException e) { return null; }
+            Matcher m = URL.matcher(s);
+            while (m.find()) {
+                int end = trimUrlEnd(s, m.start(), m.end());
+                if (pos >= m.start() && pos < end) return s.substring(m.start(), end);
+            }
+            return null;
+        }
+
+        /** http/https 주소만 기본 브라우저로 연다 (file:, javascript: 같은 것은 열지 않음) */
+        static void openLink(String url) {
+            java.net.URI u = safeLink(url);
+            if (u == null) return;
+            try { Desktop.getDesktop().browse(u); } catch (Exception ignored) { }
+        }
+
+        /** 열어도 되는 주소면 URI, 아니면 null */
+        static java.net.URI safeLink(String url) {
+            try {
+                java.net.URI u = new java.net.URI(url);
+                String scheme = u.getScheme() == null ? "" : u.getScheme().toLowerCase();
+                return (scheme.equals("http") || scheme.equals("https")) && u.getHost() != null ? u : null;
+            } catch (Exception e) {
+                return null;
+            }
+        }
+
+        /** 메모 목록에서 찾은 글자를 노랗게 표시하고 첫 위치로 이동 (글을 고치면 사라짐) */
+        void showFind(String q) {
+            clearFind();
+            if (q == null || q.isBlank() || note.lock && !revealed) return;
+            String s;
+            try { s = doc.getText(0, doc.getLength()).toLowerCase(); } catch (BadLocationException e) { return; }
+            String ql = q.toLowerCase();
+            int first = -1;
+            for (int i = s.indexOf(ql); i >= 0; i = s.indexOf(ql, i + ql.length())) {
+                if (first < 0) first = i;
+                try { findTags.add(pane.getHighlighter().addHighlight(i, i + ql.length(), new javax.swing.text.DefaultHighlighter.DefaultHighlightPainter(new Color(255, 214, 0, 150)))); }
+                catch (BadLocationException ignored) { }
+            }
+            if (first >= 0) {
+                int f = first;
+                SwingUtilities.invokeLater(() -> {
+                    try {
+                        Rectangle r = pane.modelToView2D(f).getBounds();
+                        r.height += 40;
+                        pane.scrollRectToVisible(r);
+                    } catch (Exception ignored) { }
+                });
+            }
+        }
+
+        void clearFind() {
+            for (Object t : findTags) pane.getHighlighter().removeHighlight(t);
+            findTags.clear();
+        }
+
+        /** 링크 밑줄 */
+        static final class UnderlinePainter implements javax.swing.text.Highlighter.HighlightPainter {
+            final Color c;
+
+            UnderlinePainter(Color c) { this.c = c; }
+
+            public void paint(Graphics g, int p0, int p1, Shape bounds, JTextComponent t) {
+                try {
+                    Rectangle a = t.modelToView2D(p0).getBounds(), b = t.modelToView2D(p1).getBounds();
+                    g.setColor(c);
+                    if (a.y == b.y) { g.fillRect(a.x, a.y + a.height - 2, b.x - a.x, 1); return; }
+                    // 여러 줄에 걸친 주소
+                    Rectangle area = bounds.getBounds();
+                    g.fillRect(a.x, a.y + a.height - 2, area.x + area.width - a.x, 1);
+                    for (int y = a.y + a.height; y < b.y; y += a.height) g.fillRect(area.x, y + a.height - 2, area.width, 1);
+                    g.fillRect(area.x, b.y + b.height - 2, b.x - area.x, 1);
+                } catch (BadLocationException ignored) { }
+            }
+        }
+
         // ---------- 잠금
         /** 이 창에서 "내용 보기"를 눌렀는지 (창을 닫으면 다시 가려짐) */
         boolean revealed;
@@ -4044,6 +4240,8 @@ public class QuickMemo {
             dirtyText = true;
             saveTimer.restart();
             updateFormatButtons();
+            clearFind();
+            if (linkTimer != null) linkTimer.restart();
         }
 
         void boundsChanged() {
@@ -4722,6 +4920,7 @@ public class QuickMemo {
                 } else {
                     c.restyle();
                 }
+                c.body.setQuery(searching ? q : null);
                 if (searching && !c.plain.toLowerCase().contains(q)) continue;
                 (n.favorite ? favCards : normalCards).add(c);
             }
@@ -4810,9 +5009,20 @@ public class QuickMemo {
                         new ToggleSwitch(app.store.autoSeason(), on -> { app.setAutoSeason(on); rebuild(); }))));
 
                 // 화면
-                page.add(section("화면 모드", row("밝기", "메모 목록과 창의 밝기", new Segmented(new String[]{"밝게", "어둡게"}, dark() ? 1 : 0, i -> {
-                    if ((i == 1) != dark()) { app.setDark(i == 1); rebuild(); }
-                }))));
+                boolean sys = app.store.followSystemTheme();
+                int[] sizes = {13, 14, 16, 18};
+                int fs = app.store.fontSize(), fsIdx = 1;
+                for (int k = 0; k < sizes.length; k++) if (sizes[k] == fs) fsIdx = k;
+                page.add(section("화면 모드",
+                        row("밝기", sys ? "Windows 설정을 따라가요" : "메모 목록과 창의 밝기",
+                                new Segmented(new String[]{"밝게", "어둡게", "시스템"}, sys ? 2 : dark() ? 1 : 0, i -> {
+                                    if (i == 2) { app.followSystemTheme(true); rebuild(); return; }
+                                    app.followSystemTheme(false);
+                                    if ((i == 1) != dark()) app.setDark(i == 1);
+                                    rebuild();
+                                })),
+                        row("글자 크기", "메모 글자의 크기", new Segmented(new String[]{"작게", "보통", "크게", "더 크게"}, fsIdx,
+                                i -> app.setFontSize(sizes[i])))));
 
                 // 동작
                 page.add(section("동작", row("삭제 전에 확인", "메모를 지울 때 한 번 더 묻기", new ToggleSwitch(app.store.confirmDelete(), on ->
@@ -5224,7 +5434,9 @@ public class QuickMemo {
                 Segmented(String[] items, int selected, java.util.function.IntConsumer onChange) {
                     this.items = items;
                     this.selected = selected;
-                    setPreferredSize(new Dimension(140, 32));
+                    int tw = 0;
+                    for (String it : items) tw = Math.max(tw, getFontMetrics(BASE_FONT.deriveFont(12.5f)).stringWidth(it));
+                    setPreferredSize(new Dimension(Math.max(140, items.length * Math.max(50, tw + 16)), 32));
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                     addMouseListener(new MouseAdapter() {
                         public void mouseClicked(MouseEvent e) {
@@ -5378,7 +5590,8 @@ public class QuickMemo {
                     public void mouseClicked(MouseEvent e) {
                         if (!SwingUtilities.isLeftMouseButton(e) || dragging) return;
                         if (selecting) { toggleSelected(); return; }       // 선택 모드: 누르면 선택/해제
-                        app.openNote(note);
+                        NoteWindow w = app.openNote(note);
+                        if (searching) w.showFind(search.getText().trim());   // 찾던 글자 위치로
                     }
 
                     public void mousePressed(MouseEvent e) { start = e.getPoint(); maybePopup(e); }
