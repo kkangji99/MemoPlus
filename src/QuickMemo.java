@@ -773,6 +773,7 @@ public class QuickMemo {
         String importedFrom;           // Windows 스티커 메모에서 가져온 경우 원본 Note.Id (중복 가져오기 방지)
         boolean favorite;              // 즐겨찾기: 메모 목록 위쪽에 고정
         Long order;                    // 메모 목록 순서 (작을수록 위). null 이면 최근 수정 순
+        Long remindAt;                 // 알림 시각 (epoch 밀리초). 알린 뒤에는 null
 
         boolean deleted() { return deletedAt != null; }
 
@@ -1364,6 +1365,7 @@ public class QuickMemo {
                                 Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4)));
                     }
                     case "Locked" -> n.lock = "1".equals(v);
+                    case "RemindAt" -> { try { n.remindAt = v.isEmpty() ? null : Long.parseLong(v); } catch (NumberFormatException e) { n.remindAt = null; } }
                     default -> { }
                 }
             }
@@ -1402,6 +1404,7 @@ public class QuickMemo {
             if (n.favorite) sb.append("Favorite=1\n");
             if (n.shape != NoteShape.Square) sb.append("Shape=").append(n.shape.name()).append('\n');
             if (n.order != null) sb.append("Order=").append(n.order).append('\n');
+            if (n.remindAt != null) sb.append("RemindAt=").append(n.remindAt).append('\n');
             String body = n.text;
             if (n.lock) {
                 sb.append("Locked=1\n");
@@ -1821,6 +1824,17 @@ public class QuickMemo {
                 case "plus" -> { line(g2, .24, .5, .76, .5); line(g2, .5, .24, .5, .76); }
                 case "close" -> { line(g2, .3, .3, .7, .7); line(g2, .7, .3, .3, .7); }
                 case "more" -> { for (double cx : new double[]{.22, .5, .78}) dot(g2, cx, .52, .095); }
+                case "bell" -> {                                     // 종: 몸통 + 아래 테두리 + 추
+                    java.awt.geom.Path2D.Double b = new java.awt.geom.Path2D.Double();
+                    b.moveTo(s * .2, s * .72);
+                    b.curveTo(s * .28, s * .62, s * .26, s * .5, s * .27, s * .4);
+                    b.curveTo(s * .29, s * .2, s * .71, s * .2, s * .73, s * .4);
+                    b.curveTo(s * .74, s * .5, s * .72, s * .62, s * .8, s * .72);
+                    b.closePath();
+                    g2.draw(b);
+                    line(g2, .5, .12, .5, .2);
+                    g2.draw(new java.awt.geom.Arc2D.Double(s * .41, s * .7, s * .18, s * .16, 180, 180, java.awt.geom.Arc2D.OPEN));
+                }
                 case "list" -> {
                     for (double cy : new double[]{.3, .52, .74}) { dot(g2, .2, cy, .075); line(g2, .38, cy, .82, cy); }
                 }
@@ -2136,7 +2150,7 @@ public class QuickMemo {
      * 메모 목록·설정처럼 네모난 창 위에서는 그 창을 살짝 어둡게 덮고 가운데에, 그 밖에는 화면 가운데에 뜬다.
      */
     static final class Ask {
-        enum Kind { INFO, QUESTION, WARN, DANGER }
+        enum Kind { INFO, QUESTION, WARN, DANGER, BELL }
 
         static final int SH = 16;                                    // 그림자 여백
 
@@ -2230,6 +2244,11 @@ public class QuickMemo {
                             JLabel tmp = new JLabel();
                             tmp.setForeground(iconFg);
                             new Glyph("trash", 22).paintIcon(tmp, g2, cx - 11, cy - 11);
+                        }
+                        case BELL -> {
+                            JLabel tmp = new JLabel();
+                            tmp.setForeground(iconFg);
+                            new Glyph("bell", 24).paintIcon(tmp, g2, cx - 12, cy - 12);
                         }
                         case WARN -> {
                             g2.drawLine(cx, cy - 9, cx, cy + 2);
@@ -2757,6 +2776,9 @@ public class QuickMemo {
             if (trayEnabled()) setTray(true);
             if (hotkeyEnabled()) setHotkey(true);
             new javax.swing.Timer(60 * 1000, e -> { if (store.followSystemTheme()) syncSystemTheme(); }).start();
+            javax.swing.Timer remind = new javax.swing.Timer(15 * 1000, e -> checkReminders());
+            remind.setInitialDelay(2000);                            // 꺼져 있는 동안 지난 알림은 켜고 곧바로
+            remind.start();
             new javax.swing.Timer(6 * 60 * 60 * 1000, e -> Backup.daily(store)).start();
 
             int opened = 0;
@@ -3132,6 +3154,46 @@ public class QuickMemo {
             switchLaf(dark);
             for (NoteWindow w : windows.values()) w.applyTheme();
             list.applyMode();
+        }
+
+        // ---------- 알림
+        /** 알림 시각 저장 (null 이면 끄기). 수정 시각은 바꾸지 않음 */
+        void setReminder(Note n, Long at) {
+            n.remindAt = at;
+            store.save(n);
+            if (list != null) list.refresh();
+        }
+
+        /** 시각이 지난 알림을 띄운다 (꺼져 있는 동안 지난 알림은 켜질 때 바로) */
+        void checkReminders() {
+            long now = System.currentTimeMillis();
+            for (Note n : new ArrayList<>(notes)) {
+                if (n.remindAt == null || n.remindAt > now) continue;
+                n.remindAt = null;
+                store.save(n);
+                if (!n.deleted()) fireReminder(n);
+            }
+        }
+
+        void fireReminder(Note n) {
+            NoteWindow w = openNote(n);
+            w.setExtendedState(Frame.NORMAL);
+            w.toFront();
+            w.requestFocus();
+            Toolkit.getDefaultToolkit().beep();
+            String title = n.locked() ? "잠긴 메모" : Markup.plain(n.text).strip().split("\n")[0];   // 잠긴 메모는 내용을 알림에 보이지 않음
+            if (title.isBlank()) title = "메모";
+            if (title.length() > 24) title = title.substring(0, 24) + "…";
+            if (tray != null) tray.displayMessage("QuickMemo 알림", title, TrayIcon.MessageType.INFO);
+            Toast.show(null, "알림 · " + title, "10분 뒤 다시", () -> setReminder(n, System.currentTimeMillis() + 10 * 60_000L), null);
+        }
+
+        /** "오늘 오후 6:00" / "내일 오전 9:00" / "10월 25일 오전 9:00" */
+        static String remindText(long millis) {
+            ZonedDateTime t = Instant.ofEpochMilli(millis).atZone(ZoneId.systemDefault());
+            LocalDate d = t.toLocalDate(), today = LocalDate.now();
+            String day = d.equals(today) ? "오늘" : d.equals(today.plusDays(1)) ? "내일" : d.format(NotesListWindow.DATE);
+            return day + " " + t.format(NotesListWindow.TIME);
         }
 
         /** 메모 글자 크기를 바꾸고 열린 메모에 바로 적용 */
@@ -3784,6 +3846,47 @@ public class QuickMemo {
             return p;
         }
 
+        /** 메뉴의 "알림 설정": 빠른 선택 + 날짜·시각 직접 고르기 */
+        void askReminder() {
+            java.time.LocalDateTime now = java.time.LocalDateTime.now().withSecond(0).withNano(0);
+            java.time.LocalDateTime evening = now.toLocalDate().atTime(18, 0);
+            if (!evening.isAfter(now.plusMinutes(5))) evening = evening.plusDays(1);
+            java.time.LocalDateTime start = note.remindAt != null && note.remindAt > System.currentTimeMillis()
+                    ? java.time.LocalDateTime.ofInstant(Instant.ofEpochMilli(note.remindAt), ZoneId.systemDefault()) : now.plusHours(1);
+            SpinnerDateModel model = new SpinnerDateModel(Date.from(start.atZone(ZoneId.systemDefault()).toInstant()), null, null, java.util.Calendar.MINUTE);
+            JSpinner spin = new JSpinner(model);
+            spin.setEditor(new JSpinner.DateEditor(spin, "yyyy. M. d.  a h:mm"));
+            spin.setFont(BASE_FONT.deriveFont(13f));
+            spin.setMaximumSize(new Dimension(240, 32));
+            spin.setAlignmentX(CENTER_ALIGNMENT);
+            JPanel quick = new JPanel(new GridLayout(2, 2, 6, 6));
+            quick.setOpaque(false);
+            Object[][] picks = {{"30분 뒤", now.plusMinutes(30)}, {"1시간 뒤", now.plusHours(1)},
+                    {evening.toLocalDate().equals(now.toLocalDate()) ? "오늘 저녁 6시" : "내일 저녁 6시", evening},
+                    {"내일 아침 9시", now.toLocalDate().plusDays(1).atTime(9, 0)}};
+            for (Object[] p : picks) {
+                JButton b = pill(new JButton((String) p[0]));
+                b.setFont(BASE_FONT.deriveFont(12.5f));
+                java.time.LocalDateTime at = (java.time.LocalDateTime) p[1];
+                b.addActionListener(e -> model.setValue(Date.from(at.atZone(ZoneId.systemDefault()).toInstant())));
+                quick.add(b);
+            }
+            quick.setMaximumSize(new Dimension(240, 70));
+            quick.setAlignmentX(CENTER_ALIGNMENT);
+            JPanel extra = new JPanel();
+            extra.setLayout(new BoxLayout(extra, BoxLayout.Y_AXIS));
+            extra.add(quick);
+            extra.add(Box.createVerticalStrut(10));
+            extra.add(spin);
+            if (!Ask.show(this, Ask.Kind.BELL, "언제 알려 드릴까요?", "그 시각에 이 메모를 앞으로 띄워요.", "알림 설정", "취소", extra)) return;
+            long at = ((Date) model.getValue()).getTime();
+            if (at <= System.currentTimeMillis()) {
+                Ask.notice(this, Ask.Kind.WARN, "지난 시각이에요", "지금보다 뒤의 시각을 골라 주세요.");
+                return;
+            }
+            app.setReminder(note, at);
+        }
+
         /** 메뉴의 "메모 잠그기 / 잠금 풀기" */
         void toggleLock() {
             if (note.unreadable()) return;
@@ -4112,6 +4215,14 @@ public class QuickMemo {
                 top.active = note.onTop;
                 root.add(top);
                 root.add(item("list", "메모 목록", () -> { dispose(); app.showList(); }));
+                if (note.remindAt == null) {
+                    root.add(item("bell", "알림 설정", () -> { dispose(); askReminder(); }));
+                } else {
+                    FlatButton bell = item("bell", "알림 · " + App.remindText(note.remindAt), () -> { dispose(); askReminder(); });
+                    bell.active = true;
+                    root.add(bell);
+                    root.add(item("close", "알림 끄기", () -> { dispose(); app.setReminder(note, null); }));
+                }
                 if (!note.unreadable())
                     root.add(item("lock", note.lock ? "잠금 풀기" : "메모 잠그기", () -> { dispose(); toggleLock(); }));
                 root.add(item("trash", "메모 삭제", () -> { dispose(); app.deleteNote(note, NoteWindow.this); }));
@@ -4911,7 +5022,8 @@ public class QuickMemo {
             Set<String> alive = new HashSet<>();
             for (Note n : app.activeNotes()) {
                 alive.add(n.id);
-                String stamp = n.updatedAt + "/" + n.favorite + "/" + n.shape + "/" + n.theme + "/" + n.open + "/" + n.lock + "/" + when(n.updatedAt);
+                String stamp = n.updatedAt + "/" + n.favorite + "/" + n.shape + "/" + n.theme + "/" + n.open + "/" + n.lock + "/" + when(n.updatedAt)
+                        + "/" + (n.remindAt == null ? "" : App.remindText(n.remindAt));
                 Card c = cardCache.get(n.id);
                 if (c == null || !stamp.equals(c.stamp)) {
                     c = new Card(n, n.locked() ? "" : Markup.plain(n.text));   // 잠긴 메모는 미리보기·검색에서 내용을 숨김
@@ -5558,6 +5670,13 @@ public class QuickMemo {
                 head.setOpaque(false);
                 head.add(tools, BorderLayout.WEST);
                 head.add(time, BorderLayout.EAST);
+                if (note.remindAt != null) {                                  // 알림이 잡힌 메모: 종 + 시각
+                    remind = new JLabel(App.remindText(note.remindAt), new Glyph("bell", 13), SwingConstants.LEFT);
+                    remind.setFont(BASE_FONT.deriveFont(11f));
+                    remind.setIconTextGap(3);
+                    remind.setBorder(new EmptyBorder(0, 6, 0, 0));
+                    head.add(remind, BorderLayout.CENTER);
+                }
 
                 String[] lines = plain.strip().split("\n");
                 List<String> src = new ArrayList<>();
@@ -5635,7 +5754,7 @@ public class QuickMemo {
             final PreviewText body;
             final FlatButton more, star;
             final JPanel tools;
-            JLabel pic;
+            JLabel pic, remind;
 
             boolean isSelected() { return selecting && selected.contains(note.id); }
 
@@ -5699,6 +5818,7 @@ public class QuickMemo {
                 }
                 body.setForeground(fg);
                 if (pic != null) pic.setForeground(fg);
+                if (remind != null) remind.setForeground(fg);
                 repaint();
             }
 
