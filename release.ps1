@@ -35,13 +35,11 @@ Set-Content build\manifest.txt 'Main-Class: MemoPlus' -Encoding ascii
 jar cfm build\jar\MemoPlus.jar build\manifest.txt -C build\classes .
 if ($LASTEXITCODE) { throw 'jar failed' }
 
-# QuickMemo.exe: a second launcher for the same app. Updaters of 1.0.x (QuickMemo) look for QuickMemo.exe
-# in the downloaded zip and restart it, so keeping it lets old installs update to MemoPlus.
-Set-Content build\legacy-launcher.properties 'description=MemoPlus' -Encoding ascii
+# (1.1.0-1.1.1 also shipped a QuickMemo.exe launcher for 1.0.x updaters. Since the repo rename GitHub returns
+#  MemoPlus download URLs, which 1.0.x refuses, so it no longer helps and is left out; updates replace the folder.)
 jpackage --type app-image --name MemoPlus --app-version $Version `
     --vendor MemoPlus --description 'MemoPlus sticky notes' --icon MemoPlus.ico `
     --input build\jar --main-jar MemoPlus.jar --main-class MemoPlus --dest build\image `
-    --add-launcher "QuickMemo=$PWD\build\legacy-launcher.properties" `
     --add-modules 'java.desktop,java.logging,java.net.http,jdk.crypto.ec,jdk.localedata,jdk.charsets' `
     --jlink-options '--strip-debug --no-man-pages --no-header-files --include-locales=en,ko' `
     --java-options '-Dsun.java2d.uiScale.enabled=true --enable-preview --enable-native-access=ALL-UNNAMED'

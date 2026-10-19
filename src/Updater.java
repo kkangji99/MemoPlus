@@ -100,7 +100,7 @@ final class Updater {
     static final long MAX_DOWNLOAD = 300L << 20, MAX_UNZIPPED = 800L << 20;
     static final int MAX_ENTRIES = 20000;
 
-    /** 실행 파일 이름: 지금은 MemoPlus.exe, 1.0.x 의 업데이터가 찾는 QuickMemo.exe 도 같은 앱을 띄운다 */
+    /** 실행 파일 이름: 지금은 MemoPlus.exe. QuickMemo.exe 는 1.1.0~1.1.1 에 함께 들어 있던 예전 이름 (그 버전에서 넘어올 때만) */
     static final String[] EXE_NAMES = {"MemoPlus.exe", "QuickMemo.exe"};
 
     /** exe 로 실행 중이면 그 설치 폴더, java/javaw 로 jar 를 실행 중이면 null */

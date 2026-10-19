@@ -39,7 +39,7 @@ final class Installer {
     }
     /**
      * jpackage app-image 의 내용. 제거할 때 이것만 지운다 (다른 파일이 있는 폴더를 통째로 지우지 않게).
-     * QuickMemo.exe 는 1.0.x 의 업데이터가 새 버전을 찾을 수 있게 같이 넣는 예전 이름의 실행 파일
+     * QuickMemo.exe·QuickMemo.ico 는 예전 이름 설치본(1.0.x, 1.1.0~1.1.1)에 남아 있을 수 있는 파일
      */
     static final String[] APP_FILES = {"MemoPlus.exe", "QuickMemo.exe", "MemoPlus.ico", "QuickMemo.ico", "app", "runtime"};
 
@@ -138,8 +138,105 @@ final class Installer {
             for (String n : new String[]{"MemoPlus.lnk", MemoPlus.App.OLD_AUTO_START_NAME}) Files.deleteIfExists(menu.resolve("Startup").resolve(n));
         }
         unregister();
+        if (commonRegistered()) setCommonShortcut(false);             // 공용 시작 메뉴 바로가기 (관리자 확인)
         if (isAppDir(dir)) scheduleRemove(dir, ProcessHandle.current().pid());   // 실행 중인 파일은 지울 수 없으므로 끝난 뒤 지운다
         SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.INFO, "메모플러스를 제거했어요", "메모는 " + MemoPlus.Store.dataDir() + " 에 남아 있어요."));
+    }
+
+    // ---------- 모든 사용자 시작 메뉴 (Windows 검색)
+    // 사용자 시작 메뉴(%APPDATA%)를 검색 색인에서 빼 둔 PC 에서도 '메모'·'memo' 로 찾을 수 있게 공용 시작 메뉴에 바로가기를 둔다.
+    // 쓰려면 관리자 권한이 필요하므로 UAC 확인을 거친다.
+
+    /** 관리자 확인 창에서 취소했을 때 돌려주는 값 (ERROR_CANCELLED) */
+    static final int CANCELED = 1223;
+
+    /** 공용 시작 메뉴 바로가기 경로 (테스트에서는 MEMOPLUS_COMMON_START_MENU 로 다른 폴더) */
+    static Path commonLink() {
+        String test = System.getenv("MEMOPLUS_COMMON_START_MENU");
+        if (test != null && !test.isBlank()) return Paths.get(test).resolve(MemoPlus.App.START_MENU_NAME);
+        String pd = System.getenv("ProgramData");
+        return pd == null ? null : Paths.get(pd, "Microsoft", "Windows", "Start Menu", "Programs", MemoPlus.App.START_MENU_NAME);
+    }
+
+    static boolean commonRegistered() { Path l = commonLink(); return l != null && Files.exists(l); }
+
+    /** 바로가기 내용: 실행 파일, 인자, 작업 폴더, 아이콘 */
+    record Shortcut(String target, String args, String dir, String icon) {
+        /** 같은 대상으로 등록했는지 비교할 때 쓰는 값 */
+        String key() { return target + "|" + args; }
+    }
+
+    /**
+     * 지금 실행 방식에 맞는 바로가기. exe 면 그 exe, jar 면 javaw -jar MemoPlus.jar (실행 옵션 그대로).
+     * 클래스 폴더에서 실행 중(개발·테스트)이면 null
+     */
+    static Shortcut currentShortcut() {
+        Path dir = Updater.installDir();
+        if (dir != null) {
+            String exe = Updater.exeIn(dir).toString();
+            return new Shortcut(exe, "", dir.toString(), exe);
+        }
+        try {
+            Path jar = Paths.get(MemoPlus.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toAbsolutePath();
+            if (!Files.isRegularFile(jar) || !jar.getFileName().toString().toLowerCase().endsWith(".jar")) return null;
+            Path javaw = Paths.get(System.getProperty("java.home"), "bin", "javaw.exe");
+            if (!Files.isRegularFile(javaw)) return null;
+            Path ico = jar.resolveSibling("MemoPlus.ico");
+            String args = "--enable-preview --enable-native-access=ALL-UNNAMED -Dsun.java2d.uiScale.enabled=true -jar \"" + jar + "\"";
+            return new Shortcut(javaw.toString(), args, jar.getParent().toString(), Files.isRegularFile(ico) ? ico.toString() : javaw.toString());
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /** PowerShell 작은따옴표 문자열 */
+    static String psQuote(String s) { return "'" + s.replace("'", "''") + "'"; }
+
+    /** 바로가기를 만들거나(on) 지우는 PowerShell 명령. 값은 모두 작은따옴표 문자열로 넣어 해석되지 않게 */
+    static String shortcutCommand(Path lnk, Shortcut sc, boolean on) {
+        if (!on) return "$ErrorActionPreference='Stop'; Remove-Item -LiteralPath " + psQuote(lnk.toString()) + " -Force -ErrorAction SilentlyContinue; exit 0";
+        return "$ErrorActionPreference='Stop'; "
+                + "New-Item -ItemType Directory -Force -Path " + psQuote(lnk.getParent().toString()) + " | Out-Null; "
+                + "$s=(New-Object -ComObject WScript.Shell).CreateShortcut(" + psQuote(lnk.toString()) + "); "
+                + "$s.TargetPath=" + psQuote(sc.target()) + "; $s.Arguments=" + psQuote(sc.args()) + "; "
+                + "$s.WorkingDirectory=" + psQuote(sc.dir()) + "; $s.IconLocation=" + psQuote(sc.icon() + ",0") + "; "
+                + "$s.Description='Memo+'; $s.Save(); exit 0";
+    }
+
+    /** 명령을 -EncodedCommand 로 (임시 스크립트 파일 없이: 관리자 권한으로 도는 동안 다른 프로그램이 바꿔치기할 수 없게) */
+    static String encoded(String command) {
+        return Base64.getEncoder().encodeToString(command.getBytes(StandardCharsets.UTF_16LE));
+    }
+
+    /**
+     * 공용 시작 메뉴 바로가기를 만들거나 지운다. UAC 확인 창이 뜨고, 끝날 때까지 기다린다 (EDT 밖에서 부를 것).
+     * 0 성공, CANCELED 취소, 그 밖은 실패
+     */
+    static int setCommonShortcut(boolean on) { return setCommonShortcut(on, true); }
+
+    /** elevate=false 는 테스트용: 관리자 확인 없이 같은 경로로 실행 (임시 폴더에만) */
+    static int setCommonShortcut(boolean on, boolean elevate) {
+        Path lnk = commonLink();
+        Shortcut sc = currentShortcut();
+        if (lnk == null || on && sc == null) return -1;
+        String inner = encoded(shortcutCommand(lnk, sc, on));
+        // 바깥 PowerShell 이 관리자 권한으로 안쪽 명령을 띄우고 종료 코드를 넘긴다. UAC 에서 취소하면 Start-Process 가 예외
+        String outer = "try { $p = Start-Process powershell" + (elevate ? " -Verb RunAs" : "") + " -WindowStyle Hidden -Wait -PassThru "
+                + "-ArgumentList '-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-EncodedCommand','" + inner + "'; exit $p.ExitCode } "
+                + "catch { exit " + CANCELED + " }";
+        try {
+            Process p = new ProcessBuilder("powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded(outer))
+                    .redirectErrorStream(true).start();
+            p.getInputStream().readAllBytes();
+            if (!p.waitFor(180, java.util.concurrent.TimeUnit.SECONDS)) { p.destroy(); return -1; }
+            int code = p.exitValue();
+            if (code == 0 && on != Files.exists(lnk)) code = -1;
+            Updater.log("common start menu " + (on ? "add" : "remove") + ": exit " + code);
+            return code;
+        } catch (Exception e) {
+            Updater.log("common start menu failed: " + e);
+            return -1;
+        }
     }
 
     /** pid 프로세스가 끝나면 앱 파일만 지우고, 폴더가 비면 폴더도 지운다 */

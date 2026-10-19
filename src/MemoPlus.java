@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public class MemoPlus {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.1.1";
+    static final String VERSION = "1.1.2";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/MemoPlus";
     /** 이름을 바꾸기 전 저장소 (그때 올린 릴리스 주소도 믿는다) */
@@ -3525,7 +3525,8 @@ public class MemoPlus {
                         {"편하게 쓰기", new String[][]{
                                 {"알림", "메모 … 메뉴 → 알림 설정. 그 시각에 메모가 앞으로 떠요"},
                                 {"알림 영역 · 자동 실행", "창을 다 닫아도 작업 표시줄 옆 아이콘으로 계속 실행. Windows 시작 시 실행도 돼요"},
-                                {"Windows 스티커 메모", "설정 → 가져오기에서 스티커 메모를 그대로 가져와요"}}},
+                                {"Windows 스티커 메모", "설정 → 가져오기에서 스티커 메모를 그대로 가져와요"},
+                                {"Windows 검색에 등록", "설정 → 실행에서 등록하면 시작 메뉴 검색에서 '메모'·'memo' 로 찾을 수 있어요 (관리자 확인)"}}},
                         {"지키기", new String[][]{
                                 {"메모 잠금", "메모 … 메뉴 → 메모 잠그기. 암호화해서 저장하고 목록에서 내용을 가려요"},
                                 {"백업", "하루 한 번 자동 백업(최근 7개). 설정 → 백업에서 내보내기·가져오기"},
@@ -3770,7 +3771,8 @@ public class MemoPlus {
                         row("Windows 시작 시 실행", exe ? "로그인하면 메모플러스를 켜요" : "설치된 메모플러스(exe)에서만 쓸 수 있어요", auto),
                         row("알림 영역에 남기", "창을 모두 닫아도 작업 표시줄 옆 아이콘으로 계속 실행", new ToggleSwitch(app.trayEnabled(), on -> app.setTray(on))),
                         row("새 메모 단축키", "어디서든 Ctrl+Alt+M" + (app.hotkeyEnabled() && !app.hotkeyOn ? " (다른 프로그램이 쓰고 있어요)" : ""),
-                                new ToggleSwitch(app.hotkeyEnabled(), on -> { app.setHotkey(on); rebuild(); }))));
+                                new ToggleSwitch(app.hotkeyEnabled(), on -> { app.setHotkey(on); rebuild(); })),
+                        searchRow()));
 
                 // 휴지통
                 JButton trash = pill(new JButton("열기"));
@@ -3931,6 +3933,40 @@ public class MemoPlus {
                     r.add(holder, BorderLayout.EAST);
                 }
                 return r;
+            }
+
+            /** "Windows 검색에 등록": 모든 사용자 시작 메뉴 바로가기 (관리자 확인) */
+            JComponent searchRow() {
+                Installer.Shortcut sc = Installer.currentShortcut();
+                boolean reg = Installer.commonRegistered();
+                boolean moved = reg && sc != null && !sc.key().equals(app.store.settings.getProperty("commonShortcut"));
+                JButton b = pill(new JButton(!reg ? "등록" : moved ? "다시 등록" : "해제"));
+                b.setEnabled(sc != null || reg);
+                String desc = sc == null && !reg ? "jar 나 exe 로 실행할 때만 쓸 수 있어요"
+                        : moved ? "실행 위치가 바뀌었어요. 다시 등록해 주세요"
+                        : reg ? "등록됨 · '메모', 'memo' 로 찾을 수 있어요"
+                        : "'메모'·'memo' 로 찾게 공용 시작 메뉴에 등록 (관리자 확인)";
+                b.addActionListener(e -> {
+                    boolean on = !reg || moved;
+                    b.setEnabled(false);
+                    b.setText("확인 중…");
+                    Thread t = new Thread(() -> {                         // UAC 확인을 기다리는 동안 화면이 멈추지 않게
+                        int code = Installer.setCommonShortcut(on);
+                        SwingUtilities.invokeLater(() -> {
+                            if (code == 0) {
+                                app.store.set("commonShortcut", on ? sc.key() : "");
+                                Ask.notice(this, Ask.Kind.INFO, on ? "Windows 검색에 등록했어요" : "등록을 해제했어요",
+                                        on ? "잠시 뒤 시작 메뉴 검색에서 '메모'나 'memo' 로 찾을 수 있어요." : null);
+                            } else if (code != Installer.CANCELED) {
+                                Ask.notice(this, Ask.Kind.WARN, "바꾸지 못했어요", "관리자 권한으로 시작 메뉴를 바꾸지 못했어요.");
+                            }
+                            if (isDisplayable()) rebuild();
+                        });
+                    }, "common-start-menu");
+                    t.setDaemon(true);
+                    t.start();
+                });
+                return row("Windows 검색에 등록", desc, b);
             }
 
             void exportBackup() {
