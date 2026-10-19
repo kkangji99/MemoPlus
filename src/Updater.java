@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
  * (1.0.0 의 업데이터는 폴더 교체 버그가 있어 -win64.zip 만 찾는다. 새 이름으로 올려 예전 빌드가 반복 시도하지 않게 함)
  */
 final class Updater {
-    static final String API = Optional.ofNullable(System.getenv("QUICKMEMO_UPDATE_API")).orElse("https://api.github.com");
+    static final String API = Optional.ofNullable(System.getenv("MEMOPLUS_UPDATE_API")).orElse("https://api.github.com");
     static final Pattern TAG = Pattern.compile("\"tag_name\"\\s*:\\s*\"v?([^\"]+)\"");
     static final Pattern ZIP = Pattern.compile("\"browser_download_url\"\\s*:\\s*\"([^\"]+-windows-x64\\.zip)\"");
     /** 업데이트에 실패한 뒤 다시 시도하기까지 기다리는 시간 */

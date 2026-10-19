@@ -196,7 +196,7 @@ final class StickyImport {
     static List<Map<String, Object>> readNotes() throws IOException {
         Path src = source();
         if (src == null || !Files.exists(src)) throw new IOException("이 PC에서 Windows 스티커 메모 데이터를 찾지 못했습니다.");
-        Path tmp = Files.createTempDirectory("quickmemo-import");
+        Path tmp = Files.createTempDirectory("memoplus-import");
         try {
             Path db = tmp.resolve("plum.sqlite"), wal = tmp.resolve("plum.sqlite-wal");
             Files.copy(src, db);

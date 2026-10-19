@@ -44,7 +44,7 @@ final class Markup {
         return m.find() ? new int[]{m.group(1).length() / INDENT.length(), m.end()} : null;
     }
     /** 문서 안 이미지 요소에 붙는 미디어 ID 속성 (이미지는 [bs]img=ID 토큰으로 저장) */
-    static final Object MEDIA = "quickmemo.media";
+    static final Object MEDIA = "memoplus.media";
     static final Pattern IMG = Pattern.compile("(?<!\\\\)\\\\img=([0-9a-fA-F\\-]+)");
 
     /** media != null 이면 이미지 런 (text 는 빈 문자열) */
@@ -58,9 +58,9 @@ final class Markup {
     }
 
     /** 할 일 항목 체크박스 요소에 붙는 속성 (값: 완료 여부 Boolean). 저장 토큰은 [bs]todo / [bs]done */
-    static final Object TODO = "quickmemo.todo";
+    static final Object TODO = "memoplus.todo";
     /** 할 일 항목의 들여쓰기 단계 (Integer). 저장 토큰은 [bs]todo2 처럼 숫자 접미 */
-    static final Object TODO_DEPTH = "quickmemo.todoDepth";
+    static final Object TODO_DEPTH = "memoplus.todoDepth";
     static final Pattern TODO_TOKEN = Pattern.compile("^(\\\\id=\\S+ )?\\\\(todo|done)([1-5])? ");
     static final Pattern STRIKE_TOKEN = Pattern.compile("(?<!\\\\)\\\\strike0? ");
 
