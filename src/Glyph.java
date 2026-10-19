@@ -169,6 +169,11 @@ final class Glyph implements Icon {
                 g2.setColor(new Color(255, 255, 255, 170));
                 g2.fill(new java.awt.geom.Ellipse2D.Double(s * .33, s * .17, s * .14, s * .12));
             }
+            case "info" -> {                                     // 사용설명서: 동그라미 안의 i
+                g2.draw(new java.awt.geom.Ellipse2D.Double(s * .1, s * .1, s * .8, s * .8));
+                dot(g2, .5, .32, .065);
+                line(g2, .5, .46, .5, .7);
+            }
             case "gear" -> {                                     // 흔히 쓰는 설정 톱니바퀴 (톱니 8개 + 가운데 구멍)
                 java.awt.geom.Area gear = new java.awt.geom.Area(new java.awt.geom.Ellipse2D.Double(s * .2, s * .2, s * .6, s * .6));
                 for (int k = 0; k < 8; k++) {

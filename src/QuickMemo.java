@@ -35,6 +35,8 @@ public class QuickMemo {
     static final String VERSION = "1.0.17";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
+    /** 화면에 보이는 이름과 슬로건 */
+    static final String APP_NAME = "메모플러스", APP_NAME_EN = "Memo+", SLOGAN = "메모를 더 편리하게";
 
     public static void main(String[] args) throws Exception {
         boolean dark = false;                          // 글꼴 안티앨리어싱은 Windows(ClearType) 설정을 따른다: 회색조로 강제하면 맑은 고딕 획이 빠짐
@@ -104,14 +106,12 @@ public class QuickMemo {
     /** 실행 중에 밝게/어둡게를 바꾸면 모든 창의 테마를 다시 적용 */
     static void switchLaf(boolean dark) {
         setupLaf(dark);
-        try { com.formdev.flatlaf.FlatLaf.updateUI(); } catch (Throwable e) { for (Window w : Window.getWindows()) SwingUtilities.updateComponentTreeUI(w); }
+        // FlatLaf.updateUI() 는 이미 닫힌 창(메뉴·알림·대화상자)까지 다 갱신해 오래 켜 둘수록 느려지므로 열린 창만
+        for (Window w : Window.getWindows()) if (w.isDisplayable()) SwingUtilities.updateComponentTreeUI(w);
     }
 
-    // ===================================================================== 설치 · 제거
+    // 설치·제거는 Installer.java, 자동 업데이트는 Updater.java
 
-    // ===================================================================== 자동 업데이트
-
-    // ===================================================================== 테마
     // ===================================================================== 디자인 스타일
     /**
      * 화면 스타일: 심플(기본, 원래 스티커 메모 느낌) / 아기자기(파스텔·둥근 모양·마스킹테이프) /
@@ -150,6 +150,26 @@ public class QuickMemo {
         static Style forSeason(LocalDate d) {
             int m = d.getMonthValue();
             return m >= 3 && m <= 5 ? Spring : m >= 6 && m <= 8 ? Summer : m >= 9 && m <= 11 ? Autumn : Winter;
+        }
+
+        /** 새로 나온 디자인과 나온 날. 그날부터 NEW_DAYS 동안 추천 (새 디자인을 추가하면 여기에 적는다) */
+        static final Map<Style, LocalDate> NEW = Map.of();
+        static final int NEW_DAYS = 30;
+
+        /** 추천 디자인: 새로 나온 디자인(가장 최근) → 12월 1~25일 크리스마스 → 계절 */
+        static Style recommended(LocalDate d) { return recommended(d, NEW); }
+
+        static Style recommended(LocalDate d, Map<Style, LocalDate> fresh) {
+            Style newest = null;
+            LocalDate at = null;
+            for (var e : fresh.entrySet()) {
+                LocalDate from = e.getValue();
+                if (d.isBefore(from) || !d.isBefore(from.plusDays(NEW_DAYS))) continue;
+                if (at == null || from.isAfter(at)) { newest = e.getKey(); at = from; }
+            }
+            if (newest != null) return newest;
+            if (d.getMonthValue() == 12 && d.getDayOfMonth() <= 25) return Christmas;
+            return forSeason(d);
         }
     }
 
@@ -441,9 +461,7 @@ public class QuickMemo {
         boolean unreadable() { return lock && cipher != null; }
     }
 
-    // ===================================================================== 본문 마크업
-
-    // ===================================================================== Windows 스티커 메모 가져오기
+    // 본문 마크업은 Markup.java, Windows 스티커 메모 가져오기는 StickyImport.java, 암호화·백업은 Crypto.java·Backup.java
 
     // ===================================================================== 저장소
     static final class Store {
@@ -522,7 +540,7 @@ public class QuickMemo {
 
         boolean darkMode() { return Boolean.parseBoolean(settings.getProperty("darkMode", "false")); }
         boolean confirmDelete() { return Boolean.parseBoolean(settings.getProperty("confirmDelete", "true")); }
-        /** 계절에 맞춰 디자인 자동 변경 (기본 꺼짐) */
+        /** 추천 디자인(새 디자인·계절)으로 자동 변경 (기본 꺼짐). 예전 버전과 같은 설정 키를 그대로 쓴다 */
         boolean autoSeason() { return Boolean.parseBoolean(settings.getProperty("autoSeason", "false")); }
         /** 메모 글자 크기 (기본 14) */
         int fontSize() {
@@ -842,6 +860,9 @@ public class QuickMemo {
      */
     static final class PreviewText extends JComponent {
         static final int WRAP = 250;
+        /** 줄바꿈 폭. fit 이면 가장 긴 줄 폭을 원하는 크기로 (설정 설명 글처럼 HTML JLabel 대신 쓸 때) */
+        int wrap = WRAP;
+        boolean fit;
         final List<String> src;
         final String placeholder;                            // "빈 메모"·"잠긴 메모" 처럼 기울여 쓰는 안내 (없으면 null)
         List<String> wrapped;
@@ -867,7 +888,7 @@ public class QuickMemo {
                     int end = start, lastSpace = -1, w = 0;
                     while (end < s.length()) {
                         int cw = fm.charWidth(s.charAt(end));
-                        if (w + cw > WRAP && end > start) break;
+                        if (w + cw > wrap && end > start) break;
                         if (s.charAt(end) == ' ') lastSpace = end;
                         w += cw;
                         end++;
@@ -885,7 +906,14 @@ public class QuickMemo {
         @Override
         public Dimension getPreferredSize() {
             FontMetrics fm = getFontMetrics(getFont());
-            return new Dimension(WRAP, Math.max(1, lines().size()) * fm.getHeight());
+            int width = wrap;
+            if (fit) { width = 0; for (String l : lines()) width = Math.max(width, fm.stringWidth(l)); }
+            return new Dimension(width, Math.max(1, lines().size()) * fm.getHeight());
+        }
+
+        @Override
+        public Dimension getMaximumSize() {
+            return fit ? getPreferredSize() : super.getMaximumSize();   // BoxLayout 에서 세로로 늘어나지 않게
         }
 
         @Override
@@ -1014,7 +1042,7 @@ public class QuickMemo {
                 System.exit(1);
             }
             applyStyle(chosenStyle());                                  // 기본은 심플
-            new javax.swing.Timer(60 * 60 * 1000, e -> {                // 켜 둔 채 계절이 바뀌면 따라 바꿈 (한 시간마다 확인)
+            new javax.swing.Timer(60 * 60 * 1000, e -> {                // 켜 둔 채 추천 디자인이 바뀌면 따라 바꿈 (한 시간마다 확인)
                 if (store.autoSeason() && chosenStyle() != STYLE) setStyle(chosenStyle());
             }).start();
             notes.addAll(store.loadAll());
@@ -1385,9 +1413,13 @@ public class QuickMemo {
             store.set("darkMode", String.valueOf(dark));
             // 목록 카드(직접 그리는 컴포넌트 수백 개)는 테마 갱신에서 빼고, 끝난 뒤 색만 바꿔 다시 붙인다
             if (list != null && list.cards != null) list.cards.removeAll();
+            // 설정 창은 어차피 새 색으로 다시 만드므로 테마 갱신 전에 내용을 떼어 둔다 (두 번 일하지 않게)
+            NotesListWindow.SettingsDialog sd = list != null && list.settings != null && list.settings.isDisplayable() ? list.settings : null;
+            if (sd != null) sd.setContentPane(new JPanel());
             switchLaf(dark);
             for (NoteWindow w : windows.values()) w.applyTheme();
             list.applyMode();
+            if (sd != null) sd.rebuild();
         }
 
         // ---------- 실행 중 업데이트 확인 · 설치
@@ -1558,19 +1590,16 @@ public class QuickMemo {
             Thread t = new Thread(() -> {
                 boolean d = systemDark();
                 SwingUtilities.invokeLater(() -> {
-                    if (store.followSystemTheme() && d != store.darkMode()) {
-                        setDark(d);
-                        if (list.settings != null && list.settings.isShowing()) list.settings.rebuild();
-                    }
+                    if (store.followSystemTheme() && d != store.darkMode()) setDark(d);   // 설정 창도 setDark 가 다시 만듦
                 });
             }, "theme-check");
             t.setDaemon(true);
             t.start();
         }
 
-        /** 지금 써야 할 디자인: 자동 변경이 켜져 있으면 계절 추천, 아니면 직접 고른 것 */
+        /** 지금 써야 할 디자인: 추천 디자인으로 변경이 켜져 있으면 추천, 아니면 직접 고른 것 */
         Style chosenStyle() {
-            return store.autoSeason() ? Style.forSeason(LocalDate.now())
+            return store.autoSeason() ? Style.recommended(LocalDate.now())
                     : Style.parse(store.settings.getProperty("uiStyle", Style.Simple.name()));
         }
 
@@ -3145,16 +3174,22 @@ public class QuickMemo {
             gear.setIcon(new Glyph("gear", 20));
             gear.setPreferredSize(new Dimension(40, 36));
             gear.addActionListener(e -> showSettings());
+            FlatButton info = new FlatButton("", "사용설명서");
+            info.setIcon(new Glyph("info", 20));
+            info.setPreferredSize(new Dimension(40, 36));
+            info.addActionListener(e -> showHelp());
             selectBtn.setIcon(new Glyph("trash", 20));                // 여러 개 골라 지우기
             selectBtn.setPreferredSize(new Dimension(40, 36));
             selectBtn.addActionListener(e -> setSelecting(!selecting));
             buttons.add(add);
             buttons.add(selectBtn);
             buttons.add(gear);
+            buttons.add(info);
             JPanel tb = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
             tb.setOpaque(false);
             tb.add(add);
             tb.add(selectBtn);
+            tb.add(info);
             tb.add(gear);
             top.add(title, BorderLayout.WEST);
             top.add(tb, BorderLayout.EAST);
@@ -3415,9 +3450,78 @@ public class QuickMemo {
         }
 
         /** 설정 창: 섹션 카드 + 미리보기 선택 + 토글. 바꾸면 바로 적용·저장 (확인 버튼 없음) */
-        final class SettingsDialog extends JDialog {
-            SettingsDialog() {
-                super(NotesListWindow.this, "설정", false);
+        HelpDialog help;
+
+        /** 사용설명서 창도 하나만, 모달이 아님 */
+        void showHelp() {
+            if (help == null || !help.isDisplayable()) help = new HelpDialog();
+            help.setVisible(true);
+            help.toFront();
+        }
+
+        /** 사용설명서: 설정 창과 같은 모양(카드·색)으로 기능과 단축키를 보여 준다 */
+        final class HelpDialog extends SettingsDialog {
+            HelpDialog() { super("사용설명서"); }
+
+            @Override
+            void fill(JPanel page) {
+                // 머리: 아이콘 · 이름 · 슬로건 · 버전
+                JLabel name = new JLabel(APP_NAME + " (" + APP_NAME_EN + ")", new ImageIcon(appIcon(44, Theme.Yellow)), SwingConstants.LEFT);
+                name.setFont(BASE_FONT.deriveFont(Font.BOLD, 18f));
+                name.setForeground(text());
+                name.setIconTextGap(12);
+                JLabel slogan = new JLabel(SLOGAN + "  ·  버전 " + VERSION);
+                slogan.setFont(BASE_FONT.deriveFont(12.5f));
+                slogan.setForeground(sub());
+                slogan.setBorder(new EmptyBorder(2, 56, 0, 0));
+                JPanel head = new JPanel();
+                head.setLayout(new BoxLayout(head, BoxLayout.Y_AXIS));
+                head.setOpaque(false);
+                head.setBorder(new EmptyBorder(4, 2, 14, 0));
+                head.setAlignmentX(LEFT_ALIGNMENT);
+                name.setAlignmentX(LEFT_ALIGNMENT);
+                slogan.setAlignmentX(LEFT_ALIGNMENT);
+                head.add(name);
+                head.add(slogan);
+                page.add(head);
+
+                page.add(section("시작하기",
+                        row("새 메모", "목록의 + 버튼이나 Ctrl+N. 어디서든 Ctrl+Alt+M (설정 → 실행에서 켜기)", null),
+                        row("메모 목록", "모든 메모를 카드로 보여요. 누르면 메모가 열려요", null),
+                        row("찾기", "목록 위 찾기 칸에 글자를 쓰면 바로 걸러져요. 열면 찾은 글자가 노랗게 표시돼요", null),
+                        row("자동 저장", "쓰는 대로 저장돼요. 아무것도 쓰지 않은 새 메모는 남기지 않아요", null)));
+                page.add(section("꾸미기",
+                        row("색깔 · 모양", "메모 위쪽 … 버튼(메뉴)에서 색깔과 스티커 모양(동그라미·하트·별 등)을 골라요", null),
+                        row("디자인", "설정에서 심플·아기자기·크리스마스·봄·여름·가을·겨울 중에 골라요", null),
+                        row("추천 디자인으로 변경", "켜 두면 새 디자인이 나오거나 계절이 바뀔 때 알아서 바꿔요", null),
+                        row("밝기 · 글자 크기", "설정 → 화면 모드에서 밝게·어둡게·시스템, 글자 크기를 바꿔요", null)));
+                page.add(section("글쓰기",
+                        row("서식", "굵게 Ctrl+B, 기울임 Ctrl+I, 밑줄 Ctrl+U, 취소선 Ctrl+T", null),
+                        row("목록 · 할 일", "글머리 기호와 체크 상자. Tab 으로 들여쓰기, Shift+Tab 으로 내어쓰기", null),
+                        row("그림", "복사한 그림을 Ctrl+V 로 붙여 넣거나 그림 버튼으로 넣어요", null),
+                        row("링크", "http 주소에는 밑줄이 생겨요. Ctrl+클릭하면 브라우저로 열려요", null),
+                        row("서식 버튼 순서", "서식 버튼을 끌어서 원하는 순서로 바꿔요", null)));
+                page.add(section("정리하기",
+                        row("즐겨찾기", "카드의 별을 누르면 목록 맨 위에 고정돼요", null),
+                        row("순서 바꾸기", "카드를 끌어서 순서를 바꿔요", null),
+                        row("여러 개 지우기", "목록의 휴지통 버튼 → 고르기 → 삭제. 전체 선택도 돼요", null),
+                        row("휴지통", "지운 메모는 " + App.TRASH_DAYS + "일 동안 설정 → 휴지통에서 되살릴 수 있어요. 지운 직후에는 '되돌리기'", null)));
+                page.add(section("편하게 쓰기",
+                        row("알림", "메모 … 메뉴 → 알림 설정. 그 시각에 메모가 앞으로 떠요", null),
+                        row("알림 영역 · 자동 실행", "창을 다 닫아도 작업 표시줄 옆 아이콘으로 계속 실행. Windows 시작 시 실행도 돼요", null),
+                        row("Windows 스티커 메모", "설정 → 가져오기에서 스티커 메모를 그대로 가져와요", null)));
+                page.add(section("지키기",
+                        row("메모 잠금", "메모 … 메뉴 → 메모 잠그기. 암호화해서 저장하고 목록에서 내용을 가려요", null),
+                        row("백업", "하루 한 번 자동 백업(최근 7개). 설정 → 백업에서 내보내기·가져오기", null),
+                        row("업데이트", "새 버전이 나오면 알아서 받아요. 메모는 그대로 남아요", null)));
+            }
+        }
+
+        class SettingsDialog extends JDialog {
+            SettingsDialog() { this("설정"); }
+
+            SettingsDialog(String title) {
+                super(NotesListWindow.this, title, false);
                 setDefaultCloseOperation(DISPOSE_ON_CLOSE);
                 build();
                 setSize(480, 700);
@@ -3452,13 +3556,18 @@ public class QuickMemo {
                 page.setBackground(pageBg());
                 blendTitleBar(getRootPane(), pageBg(), text());
                 page.setBorder(new EmptyBorder(16, 18, 16, 18));
+                fill(page);
+                finish(page);
+            }
 
+            /** 창 내용 (사용설명서 창은 이것만 바꾼다) */
+            void fill(JPanel page) {
                 // 디자인
                 JPanel styles = new JPanel(new GridLayout(0, 4, 8, 8));
                 styles.setOpaque(false);
                 for (Style s : Style.values()) styles.add(new StyleCard(s, s.label, s.desc));
-                Style season = Style.forSeason(LocalDate.now());
-                page.add(section("디자인", styles, row("계절에 맞춰 자동 변경", "계절마다 추천 디자인으로 (지금: " + season.label + ")",
+                Style pick = Style.recommended(LocalDate.now());
+                page.add(section("디자인", styles, row("추천 디자인으로 변경", "새 디자인이나 계절에 맞춰 바꿔요 (지금: " + pick.label + ")",
                         new ToggleSwitch(app.store.autoSeason(), on -> { app.setAutoSeason(on); rebuild(); }))));
 
                 // 화면
@@ -3471,8 +3580,8 @@ public class QuickMemo {
                                 new Segmented(new String[]{"밝게", "어둡게", "시스템"}, sys ? 2 : dark() ? 1 : 0, i -> {
                                     if (i == 2) { app.followSystemTheme(true); rebuild(); return; }
                                     app.followSystemTheme(false);
-                                    if ((i == 1) != dark()) app.setDark(i == 1);
-                                    rebuild();
+                                    if ((i == 1) != dark()) app.setDark(i == 1);       // 설정 창은 setDark 가 한 번만 다시 만듦
+                                    else rebuild();
                                 })),
                         row("글자 크기", "메모 글자의 크기", new Segmented(new String[]{"작게", "보통", "크게", "더 크게"}, fsIdx,
                                 i -> app.setFontSize(sizes[i])))));
@@ -3543,7 +3652,10 @@ public class QuickMemo {
                 whereRow.setToolTipText(app.store.dir.toString());
                 info.add(whereRow);
                 page.add(section("정보", info.toArray(new JComponent[0])));
+            }
 
+            /** 스크롤 + 항상 보이는 아래쪽 닫기 바 */
+            void finish(JPanel page) {
                 JScrollPane sp = new JScrollPane(page, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
                 sp.setBorder(new EmptyBorder(0, 0, 0, 0));   // null 이면 테마를 바꿀 때 FlatLaf 가 기본 테두리(회색 선)를 다시 넣음
                 sp.getViewport().setBackground(pageBg());
@@ -3629,7 +3741,10 @@ public class QuickMemo {
                 labels.setOpaque(false);
                 JLabel t = new JLabel(title);
                 t.setForeground(text());
-                JLabel d = new JLabel("<html><div style='width:190px'>" + esc(desc) + "</div></html>");
+                PreviewText d = new PreviewText(List.of(desc == null ? "" : desc), null);   // HTML JLabel 은 만들 때마다 HTML 을 해석해 설정 창 다시 만들기가 느려짐
+                d.wrap = right == null ? 380 : 240;                   // 오른쪽 버튼이 없으면 카드 폭만큼
+                d.fit = true;
+                d.setAlignmentX(LEFT_ALIGNMENT);
                 d.setFont(BASE_FONT.deriveFont(11.5f));
                 d.setForeground(sub());
                 labels.add(t);
@@ -3781,6 +3896,9 @@ public class QuickMemo {
                 final Style style;
                 final String name, desc;
 
+                boolean picking;                                         // 눌러서 바꾸는 중 (선택 표시 먼저)
+                final Style recommendedNow = Style.recommended(LocalDate.now());   // 그릴 때마다 계산하지 않게
+
                 StyleCard(Style style, String name, String desc) {
                     this.style = style;
                     this.name = name;
@@ -3789,11 +3907,14 @@ public class QuickMemo {
                     setToolTipText(name + " · " + desc);
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                     addMouseListener(new MouseAdapter() {
-                        public void mouseClicked(MouseEvent e) {
+                        public void mousePressed(MouseEvent e) {             // 누르는 순간 반응 (떼기를 기다리지 않음)
+                            if (!SwingUtilities.isLeftMouseButton(e)) return;
                             boolean auto = app.store.autoSeason();
                             if (STYLE == style && !auto) return;
+                            picking = true;                                  // 선택 표시를 먼저 그려 바로 반응하는 것처럼
+                            paintImmediately(0, 0, getWidth(), getHeight());
                             app.store.set("uiStyle", style.name());
-                            if (auto) app.store.set("autoSeason", "false");   // 직접 고르면 자동 변경은 끔
+                            if (auto) app.store.set("autoSeason", "false");   // 직접 고르면 추천 디자인으로 변경은 끔
                             app.setStyle(style);
                             rebuild();
                         }
@@ -3806,7 +3927,7 @@ public class QuickMemo {
                     g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                     g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
                     g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
-                    boolean sel = STYLE == style;
+                    boolean sel = STYLE == style || picking;
                     int w = getWidth(), h = getHeight();
                     g2.setColor(dark() ? mix(cardBg(), Color.WHITE, .04) : mix(cardBg(), pageBg(), .5));
                     g2.fillRoundRect(0, 0, w - 1, h - 1, 12, 12);
@@ -3872,7 +3993,7 @@ public class QuickMemo {
                     g2.setColor(sub());
                     fm = g2.getFontMetrics();
                     g2.drawString(desc, (w - fm.stringWidth(desc)) / 2, py + ph + 39);
-                    if (style == Style.forSeason(LocalDate.now())) {     // 지금 계절 추천 표시
+                    if (style == recommendedNow) {                        // 지금 추천 디자인 표시
                         g2.setFont(BASE_FONT.deriveFont(Font.BOLD, 10f));
                         fm = g2.getFontMetrics();
                         String tag = "추천";
@@ -3906,11 +4027,12 @@ public class QuickMemo {
                     setPreferredSize(new Dimension(Math.max(140, items.length * Math.max(50, tw + 16)), 32));
                     setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
                     addMouseListener(new MouseAdapter() {
-                        public void mouseClicked(MouseEvent e) {
-                            int i = Math.min(items.length - 1, e.getX() * items.length / Math.max(1, getWidth()));
+                        public void mousePressed(MouseEvent e) {             // 누르는 순간 반응
+                            if (!SwingUtilities.isLeftMouseButton(e)) return;
+                            int i = Math.max(0, Math.min(items.length - 1, e.getX() * items.length / Math.max(1, getWidth())));
                             if (i == Segmented.this.selected) return;
                             Segmented.this.selected = i;
-                            repaint();
+                            paintImmediately(0, 0, getWidth(), getHeight());   // 선택 표시 먼저, 무거운 작업은 그다음
                             onChange.accept(i);
                         }
                     });
