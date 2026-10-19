@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.14";
+    static final String VERSION = "1.0.15";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -3047,7 +3047,13 @@ public class QuickMemo {
             MenuPopup() {
                 super(NoteWindow.this);
                 Theme t = note.theme;
-                if (TRANSLUCENT) setBackground(new Color(0, 0, 0, 0));
+                if (TRANSLUCENT) {
+                    setBackground(new Color(0, 0, 0, 0));
+                    // FlatLaf 는 JWindow 의 루트 패널 배경을 회색으로 칠하므로 투명하게 (카드 바깥·그림자 자리)
+                    getRootPane().setOpaque(false);
+                    getRootPane().setBackground(new Color(0, 0, 0, 0));
+                    getLayeredPane().setOpaque(false);
+                }
                 JPanel root = new JPanel() {
                     @Override
                     protected void paintComponent(Graphics g) {
