@@ -658,6 +658,13 @@ public class QuickMemo {
     /** 스타일 포인트 색 (아기자기 분홍, 크리스마스 빨강, 계절마다 다름) */
     static Color styleAccent() { return STYLE == Style.Simple ? PINK : STYLE.accent; }
 
+    /** a 와 b 를 t(0~1) 비율로 섞은 색 */
+    static Color mix(Color a, Color b, double t) {
+        return new Color((int) Math.round(a.getRed() + (b.getRed() - a.getRed()) * t),
+                (int) Math.round(a.getGreen() + (b.getGreen() - a.getGreen()) * t),
+                (int) Math.round(a.getBlue() + (b.getBlue() - a.getBlue()) * t));
+    }
+
     /** 포인트 색을 투명하게 */
     static Color styleAccent(int alpha) {
         Color c = styleAccent();
@@ -3598,7 +3605,7 @@ public class QuickMemo {
             doc = pane.getStyledDocument();
             pane.setTransferHandler(new NoteTransfer());   // 이미지 붙여넣기·끌어놓기
             scroll =new JScrollPane(pane, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-            scroll.setBorder(null);
+            scroll.setBorder(new EmptyBorder(0, 0, 0, 0));   // null 이면 테마를 바꿀 때 FlatLaf 가 기본 테두리(회색 선)를 다시 넣음
             scroll.setOpaque(false);
             scroll.getViewport().setOpaque(false);
             scroll.getVerticalScrollBar().setPreferredSize(new Dimension(8, 0));
@@ -5108,7 +5115,7 @@ public class QuickMemo {
             JPanel holder = new TrackWidthPanel();   // 스크롤바가 생겨도 카드가 보이는 너비에 맞춰짐
             holder.add(cards, BorderLayout.NORTH);
             scroll = new JScrollPane(holder, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-            scroll.setBorder(null);
+            scroll.setBorder(new EmptyBorder(0, 0, 0, 0));   // null 이면 테마를 바꿀 때 FlatLaf 가 기본 테두리(회색 선)를 다시 넣음
             scroll.getVerticalScrollBar().setUnitIncrement(16);
             scroll.getVerticalScrollBar().setUI(new CuteScrollBarUI());
             scroll.getVerticalScrollBar().setPreferredSize(new Dimension(10, 0));
@@ -5313,10 +5320,22 @@ public class QuickMemo {
 
             boolean dark() { return app.store.darkMode(); }
             Color accent() { return cute() ? styleAccent() : dark() ? new Color(0x4CC2FF) : new Color(0x0067C0); }
-            Color pageBg() { return dark() ? new Color(0x202020) : new Color(0xF3F3F3); }
-            Color cardBg() { return dark() ? new Color(0x2B2B2B) : Color.WHITE; }
-            Color text() { return dark() ? new Color(0xF0F0F0) : new Color(0x1B1B1B); }
-            Color sub() { return dark() ? new Color(0xA8A8A8) : new Color(0x6B6B6B); }
+            // 디자인(스타일)마다 메모 목록과 같은 바탕색, 글자는 포인트 색이 살짝 섞인 색
+            Color pageBg() { return dark() ? STYLE.listDark : STYLE.listLight; }
+            Color cardBg() {
+                if (!cute()) return dark() ? new Color(0x2B2B2B) : Color.WHITE;
+                return dark() ? mix(STYLE.listDark, Color.WHITE, .06) : mix(STYLE.listLight, Color.WHITE, .7);
+            }
+            Color text() {
+                Color base = dark() ? new Color(0xF0F0F0) : new Color(0x1B1B1B);
+                return cute() ? mix(base, styleAccent(), dark() ? .08 : .18) : base;
+            }
+            Color sub() {
+                Color base = dark() ? new Color(0xA8A8A8) : new Color(0x6B6B6B);
+                return cute() ? mix(base, styleAccent(), dark() ? .12 : .22) : base;
+            }
+            /** 바탕보다 조금 진한 색 (아래 닫기 바, 선택 상자 바탕) */
+            Color shade() { return dark() ? mix(pageBg(), Color.WHITE, .09) : mix(pageBg(), Color.BLACK, .05); }
 
             /** 색·스타일이 바뀌면 내용을 다시 만든다 */
             void build() {
@@ -5418,7 +5437,7 @@ public class QuickMemo {
                 page.add(section("정보", info.toArray(new JComponent[0])));
 
                 JScrollPane sp = new JScrollPane(page, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-                sp.setBorder(null);
+                sp.setBorder(new EmptyBorder(0, 0, 0, 0));   // null 이면 테마를 바꿀 때 FlatLaf 가 기본 테두리(회색 선)를 다시 넣음
                 sp.getViewport().setBackground(pageBg());
                 sp.getVerticalScrollBar().setUnitIncrement(16);
 
@@ -5427,7 +5446,7 @@ public class QuickMemo {
                 close.addActionListener(e -> dispose());
                 close.setPreferredSize(new Dimension(96, 32));
                 JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT, 0, 0));
-                bottom.setBackground(dark() ? new Color(0x1A1A1A) : new Color(0xEBEBEB));
+                bottom.setBackground(dark() ? mix(pageBg(), Color.BLACK, .2) : mix(pageBg(), Color.BLACK, .035));
                 bottom.setBorder(BorderFactory.createCompoundBorder(
                         BorderFactory.createMatteBorder(1, 0, 0, 0, dark() ? new Color(255, 255, 255, 20) : new Color(0, 0, 0, 20)),
                         new EmptyBorder(12, 18, 12, 18)));
@@ -5634,7 +5653,7 @@ public class QuickMemo {
                         page.add(section(null, row(first, NotesListWindow.when(n.deletedAt) + " 삭제 · " + days + "일 뒤 완전 삭제", btns)));
                     }
                     JScrollPane sp = new JScrollPane(page, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-                    sp.setBorder(null);
+                    sp.setBorder(new EmptyBorder(0, 0, 0, 0));   // null 이면 테마를 바꿀 때 FlatLaf 가 기본 테두리(회색 선)를 다시 넣음
                     sp.getViewport().setBackground(pageBg());
                     sp.getVerticalScrollBar().setUnitIncrement(16);
                     setContentPane(sp);
@@ -5681,7 +5700,7 @@ public class QuickMemo {
                     g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
                     boolean sel = STYLE == style;
                     int w = getWidth(), h = getHeight();
-                    g2.setColor(dark() ? new Color(0x333333) : new Color(0xF7F7F7));
+                    g2.setColor(dark() ? mix(cardBg(), Color.WHITE, .04) : mix(cardBg(), pageBg(), .5));
                     g2.fillRoundRect(0, 0, w - 1, h - 1, 12, 12);
                     g2.setColor(sel ? accent() : dark() ? new Color(255, 255, 255, 30) : new Color(0, 0, 0, 30));
                     g2.setStroke(new BasicStroke(sel ? 2f : 1f));
@@ -5796,7 +5815,7 @@ public class QuickMemo {
                     g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
                     g2.setRenderingHint(RenderingHints.KEY_FRACTIONALMETRICS, RenderingHints.VALUE_FRACTIONALMETRICS_ON);   // 회색조에서 맑은 고딕 획 빠짐 방지
                     int w = getWidth(), h = getHeight(), seg = w / items.length;
-                    g2.setColor(dark() ? new Color(0x3A3A3A) : new Color(0xEDEDED));
+                    g2.setColor(shade());
                     g2.fillRoundRect(0, 0, w, h, h, h);
                     g2.setColor(cardBg());
                     g2.fillRoundRect(selected * seg + 3, 3, seg - 6, h - 6, h - 6, h - 6);
