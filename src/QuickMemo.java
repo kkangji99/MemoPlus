@@ -46,6 +46,10 @@ public class QuickMemo {
         } catch (IOException ignored) { }
         boolean d = dark;
         SwingUtilities.invokeAndWait(() -> setupLaf(d));
+        if (Arrays.asList(args).contains("--uninstall")) {          // 앱 및 기능 → 제거
+            Installer.uninstall();
+            System.exit(0);
+        }
         if (Updater.updateIfAvailable()) return;      // 새 버전을 받아 재시작하는 경우
         SwingUtilities.invokeLater(() -> new App().start());
     }
@@ -101,6 +105,137 @@ public class QuickMemo {
     static void switchLaf(boolean dark) {
         setupLaf(dark);
         try { com.formdev.flatlaf.FlatLaf.updateUI(); } catch (Throwable e) { for (Window w : Window.getWindows()) SwingUtilities.updateComponentTreeUI(w); }
+    }
+
+    // ===================================================================== 설치 · 제거
+    /**
+     * MSI 없이 스스로 설치: 압축을 푼 곳에서 실행 중이면 %LOCALAPPDATA%\Programs\QuickMemo 로 복사해 다시 실행.
+     * exe 로 실행될 때마다 "앱 및 기능" 목록(HKCU Uninstall)에 등록하고, 제거는 QuickMemo.exe --uninstall.
+     * 제거는 앱 파일(QuickMemo.exe, app, runtime)만 지우고 메모(%APPDATA%\QuickMemo)는 남긴다.
+     */
+    static final class Installer {
+        /** 테스트에서 실제 레지스트리를 건드리지 않게 바꿀 수 있음 */
+        static final String KEY = System.getProperty("quickmemo.uninstallKey", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QuickMemo");
+        /** jpackage app-image 의 내용. 제거할 때 이것만 지운다 (다른 파일이 있는 폴더를 통째로 지우지 않게) */
+        static final String[] APP_FILES = {"QuickMemo.exe", "QuickMemo.ico", "app", "runtime"};
+
+        /** 표준 설치 위치 */
+        static Path home() {
+            String la = System.getenv("LOCALAPPDATA");
+            return la == null ? null : Paths.get(la, "Programs", "QuickMemo");
+        }
+
+        /** exe 로 실행 중인데 표준 위치가 아닌 곳(다운로드 폴더 등)이면 true */
+        static boolean canInstall() {
+            Path dir = Updater.installDir(), h = home();
+            return dir != null && h != null && !dir.toAbsolutePath().normalize().equals(h.toAbsolutePath().normalize());
+        }
+
+        /** QuickMemo 앱 폴더가 맞는지 (exe + app\QuickMemo.jar + runtime) */
+        static boolean isAppDir(Path dir) {
+            return dir != null && Files.isRegularFile(dir.resolve("QuickMemo.exe")) && Files.isRegularFile(dir.resolve("app").resolve("QuickMemo.jar"))
+                    && Files.isDirectory(dir.resolve("runtime"));
+        }
+
+        /** 지금 실행 중인 앱 폴더를 표준 위치로 복사 (있던 앱 파일은 바꿈) */
+        static Path copyToHome() throws IOException {
+            Path src = Updater.installDir(), dst = home();
+            if (!isAppDir(src) || dst == null) throw new IOException("설치할 QuickMemo 파일을 찾지 못했어요.");
+            Path staging = dst.resolveSibling("QuickMemo.install");
+            Updater.deleteTree(staging);
+            Path root = src.toAbsolutePath().normalize();
+            try (var walk = Files.walk(root)) {
+                for (Path p : walk.toList()) {
+                    Path rel = root.relativize(p);
+                    if (rel.getNameCount() > 0 && !Arrays.asList(APP_FILES).contains(rel.getName(0).toString())) continue;
+                    Path to = staging.resolve(rel.toString());
+                    if (Files.isDirectory(p)) Files.createDirectories(to);
+                    else Files.copy(p, to, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
+            Files.createDirectories(dst);
+            for (String f : APP_FILES) {                                // 있던 설치본의 앱 파일만 바꾼다
+                Updater.deleteTree(dst.resolve(f));
+                if (Files.exists(staging.resolve(f))) Files.move(staging.resolve(f), dst.resolve(f));
+            }
+            Updater.deleteTree(staging);
+            return dst;
+        }
+
+        /** "앱 및 기능" 목록에 등록 (버전·위치가 바뀌면 다시) */
+        static boolean register(Path dir) {
+            String exe = dir.resolve("QuickMemo.exe").toString();
+            String[][] values = {{"DisplayName", "REG_SZ", "QuickMemo"}, {"DisplayVersion", "REG_SZ", VERSION}, {"Publisher", "REG_SZ", "QuickMemo"},
+                    {"DisplayIcon", "REG_SZ", exe}, {"InstallLocation", "REG_SZ", dir.toString()},
+                    {"UninstallString", "REG_SZ", "\"" + exe + "\" --uninstall"}, {"NoModify", "REG_DWORD", "1"}, {"NoRepair", "REG_DWORD", "1"}};
+            boolean ok = true;
+            // 값 안의 큰따옴표는 \" 로 넘겨야 reg 가 받는다 (안 그러면 경로에 공백이 있을 때 제거 명령이 깨짐)
+            for (String[] v : values) ok &= reg("add", KEY, "/v", v[0], "/t", v[1], "/d", v[2].replace("\"", "\\\""), "/f");
+            return ok;
+        }
+
+        static boolean unregister() { return reg("delete", KEY, "/f"); }
+
+        static boolean registered() { return reg("query", KEY, "/v", "UninstallString"); }
+
+        /** reg.exe 실행 (인자는 따로 넘기므로 셸 해석 없음) */
+        static boolean reg(String... args) {
+            try {
+                List<String> cmd = new ArrayList<>();
+                cmd.add("reg");
+                cmd.addAll(Arrays.asList(args));
+                Process p = new ProcessBuilder(cmd).redirectErrorStream(true).start();
+                p.getInputStream().readAllBytes();
+                return p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0;
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        /** QuickMemo.exe --uninstall: 확인 → 바로가기·등록 삭제 → 끝난 뒤 앱 파일 삭제 */
+        static void uninstall() throws Exception {
+            Path dir = Updater.installDir();
+            boolean[] go = new boolean[1];
+            SwingUtilities.invokeAndWait(() -> {
+                if (Updater.anotherInstanceRunning()) {
+                    Ask.notice(null, Ask.Kind.WARN, "QuickMemo가 실행 중이에요", "알림 영역의 QuickMemo 아이콘에서 종료한 뒤 다시 제거해 주세요.");
+                    return;
+                }
+                go[0] = Ask.confirm(null, Ask.Kind.DANGER, "QuickMemo를 제거할까요?",
+                        "메모는 지우지 않아요.\n" + Store.dataDir(), "제거", "취소");
+            });
+            if (!go[0]) return;
+            String appData = System.getenv("APPDATA");
+            if (appData != null) {
+                Path menu = Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs");
+                Files.deleteIfExists(menu.resolve(App.START_MENU_NAME));
+                Files.deleteIfExists(menu.resolve("Startup").resolve("QuickMemo.lnk"));
+            }
+            unregister();
+            if (isAppDir(dir)) scheduleRemove(dir, ProcessHandle.current().pid());   // 실행 중인 파일은 지울 수 없으므로 끝난 뒤 지운다
+            SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.INFO, "QuickMemo를 제거했어요", "메모는 " + Store.dataDir() + " 에 남아 있어요."));
+        }
+
+        /** pid 프로세스가 끝나면 앱 파일만 지우고, 폴더가 비면 폴더도 지운다 */
+        static Process scheduleRemove(Path dir, long pid) throws IOException {
+            {
+                Path script = Files.createTempFile("QuickMemo-uninstall-", ".ps1");
+                Files.writeString(script, String.join("\r\n",
+                        "param([int]$OldPid, [string]$Dir)",
+                        "try { Wait-Process -Id $OldPid -Timeout 60 -ErrorAction SilentlyContinue } catch {}",
+                        "Start-Sleep -Milliseconds 500",
+                        "foreach ($n in @('" + String.join("','", APP_FILES) + "')) {",
+                        "  $p = Join-Path $Dir $n",
+                        "  for ($i = 0; $i -lt 10 -and (Test-Path -LiteralPath $p); $i++) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue; if (Test-Path -LiteralPath $p) { Start-Sleep -Milliseconds 700 } }",
+                        "}",
+                        "if (-not @(Get-ChildItem -LiteralPath $Dir -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $Dir -Force -ErrorAction SilentlyContinue }",
+                        "Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
+                        ""), StandardCharsets.UTF_8);
+                return new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                        "-File", script.toString(), "-OldPid", String.valueOf(pid), "-Dir", dir.toString())
+                        .directory(script.getParent().toFile()).start();
+            }
+        }
     }
 
     // ===================================================================== 자동 업데이트
@@ -2779,6 +2914,7 @@ public class QuickMemo {
             javax.swing.Timer remind = new javax.swing.Timer(15 * 1000, e -> checkReminders());
             remind.setInitialDelay(2000);                            // 꺼져 있는 동안 지난 알림은 켜고 곧바로
             remind.start();
+            new javax.swing.Timer(6 * 60 * 60 * 1000, e -> checkUpdateQuietly()).start();   // 켜 둔 채 새 버전이 나오면 알림 (시작할 때는 Updater 가 확인)
             new javax.swing.Timer(6 * 60 * 60 * 1000, e -> Backup.daily(store)).start();
 
             int opened = 0;
@@ -2812,32 +2948,15 @@ public class QuickMemo {
             if (dir == null || appData == null) return;
             Path exe = dir.resolve("QuickMemo.exe");
             Path lnk = Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs", START_MENU_NAME);
-            if (exe.toString().equals(store.settings.getProperty("startMenuTarget")) && Files.exists(lnk)) return;
-            store.set("startMenuTarget", exe.toString());
+            String mark = exe + "|" + VERSION;                         // 위치나 버전이 바뀌면 다시 등록
+            if (mark.equals(store.settings.getProperty("startMenuTarget")) && Files.exists(lnk)) return;
+            store.set("startMenuTarget", mark);
+            boolean auto = autoStart();
             Thread t = new Thread(() -> {
-                try {
-                    Files.createDirectories(lnk.getParent());
-                    Path script = Files.createTempFile("QuickMemo-shortcut-", ".ps1");
-                    Files.writeString(script, String.join("\r\n",
-                            "param([string]$Lnk, [string]$Exe, [string]$Dir)",
-                            "$ErrorActionPreference = 'Stop'",
-                            "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($Lnk)",
-                            "$s.TargetPath = $Exe",
-                            "$s.WorkingDirectory = $Dir",
-                            "$s.IconLocation = \"$Exe,0\"",
-                            "$s.Description = 'QuickMemo'",
-                            "$s.Save()",
-                            ""), StandardCharsets.UTF_8);
-                    Process p = new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
-                            "-File", script.toString(), "-Lnk", lnk.toString(), "-Exe", exe.toString(), "-Dir", dir.toString())
-                            .redirectErrorStream(true).start();
-                    p.getInputStream().readAllBytes();
-                    p.waitFor();
-                    Files.deleteIfExists(script);
-                    Updater.log("start menu shortcut: " + lnk + " -> " + exe + " (exit " + p.exitValue() + ")");
-                } catch (Exception e) {
-                    Updater.log("start menu shortcut failed: " + e);
-                }
+                boolean ok = makeShortcut(lnk, exe, dir);
+                if (auto) makeShortcut(autoStartLink(), exe, dir);      // 자동 실행 바로가기도 새 위치로
+                boolean reg = Installer.register(dir);
+                Updater.log("start menu shortcut: " + lnk + " -> " + exe + " (" + ok + "), uninstall entry (" + reg + ")");
             }, "start-menu");
             t.setDaemon(true);
             t.start();
@@ -3154,6 +3273,101 @@ public class QuickMemo {
             switchLaf(dark);
             for (NoteWindow w : windows.values()) w.applyTheme();
             list.applyMode();
+        }
+
+        // ---------- 실행 중 업데이트 확인 · 설치
+        String offeredVersion;                                       // 이번 실행에서 이미 알린 새 버전
+
+        /** 켜 둔 채 새 버전이 나오면 알림 (exe 실행일 때만, 확인은 백그라운드) */
+        void checkUpdateQuietly() {
+            if (Updater.installDir() == null || UPDATE_REPO.isBlank()) return;
+            Thread t = new Thread(() -> {
+                Updater.Release r;
+                try { r = Updater.latest(); } catch (Exception e) { return; }
+                if (r == null || Updater.compare(r.version(), VERSION) <= 0) return;
+                SwingUtilities.invokeLater(() -> {
+                    if (r.version().equals(offeredVersion)) return;
+                    offeredVersion = r.version();
+                    Toast.show(list.isShowing() ? list : null, "QuickMemo " + r.version() + " 버전이 나왔어요", "업데이트", () -> updateNow(r), null);
+                });
+            }, "update-check");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        /** 설정의 "업데이트 확인" */
+        void checkUpdateNow(Component parent) {
+            if (Updater.installDir() == null) { Ask.notice(parent, Ask.Kind.INFO, "개발용 실행이에요", "설치된 QuickMemo(exe)에서만 업데이트할 수 있어요."); return; }
+            Thread t = new Thread(() -> {
+                Updater.Release r;
+                try { r = Updater.latest(); } catch (Exception e) { r = null; }
+                Updater.Release found = r;
+                SwingUtilities.invokeLater(() -> {
+                    if (found == null) Ask.notice(parent, Ask.Kind.WARN, "업데이트를 확인하지 못했어요", "인터넷 연결을 확인한 뒤 다시 시도해 주세요.");
+                    else if (Updater.compare(found.version(), VERSION) <= 0) Ask.notice(parent, Ask.Kind.INFO, "최신 버전이에요", "지금 버전: " + VERSION);
+                    else updateNow(found);
+                });
+            }, "update-check");
+            t.setDaemon(true);
+            t.start();
+        }
+
+        /** 메모를 저장하고 새 버전으로 바꾼 뒤 다시 실행. 실패하면 그대로 계속 */
+        void updateNow(Updater.Release r) {
+            Path dir = Updater.installDir();
+            if (dir == null) return;
+            if (!Ask.confirm(list.isShowing() ? list : null, Ask.Kind.QUESTION, "QuickMemo " + r.version() + "로 업데이트할까요?",
+                    "메모를 저장하고 다시 실행해요.", "업데이트", "나중에")) return;
+            for (NoteWindow w : windows.values()) w.flush();
+            releaseLock();                                           // 업데이트 스크립트가 새 버전을 띄울 수 있게
+            Thread t = new Thread(() -> {
+                if (!Updater.apply(r, dir)) SwingUtilities.invokeLater(this::takeLock);   // 성공하면 apply 가 종료
+            }, "update");
+            t.start();
+        }
+
+        void releaseLock() {
+            try { if (lock != null) { lock.release(); lock.channel().close(); } } catch (IOException ignored) { }
+            lock = null;
+        }
+
+        void takeLock() {
+            try { lock = FileChannel.open(store.dir.resolve(".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE).tryLock(); } catch (IOException ignored) { }
+        }
+
+        /** 설정의 "이 PC에 설치": 표준 위치로 복사 → 이 창이 끝나면 설치본 실행 */
+        void installNow(Component parent) {
+            Path from = Updater.installDir(), to = Installer.home();
+            if (!Ask.confirm(parent, Ask.Kind.QUESTION, "이 PC에 설치할까요?",
+                    to + " 에 설치하고 시작 메뉴에 등록해요.\n설치한 뒤에는 지금 폴더를 지워도 돼요.", "설치", "취소")) return;
+            Thread t = new Thread(() -> {
+                Updater.Progress pw = Updater.Progress.show("QuickMemo 설치 중...");
+                try {
+                    Path dst = Installer.copyToHome();
+                    pw.close();
+                    SwingUtilities.invokeAndWait(() -> {
+                        for (NoteWindow w : windows.values()) w.flush();
+                        releaseLock();
+                    });
+                    Path script = Files.createTempFile("QuickMemo-relaunch-", ".ps1");
+                    Files.writeString(script, String.join("\r\n",
+                            "param([int]$OldPid, [string]$Exe)",
+                            "try { Wait-Process -Id $OldPid -Timeout 60 -ErrorAction SilentlyContinue } catch {}",
+                            "Start-Process -FilePath $Exe -WorkingDirectory (Split-Path -Parent $Exe)",
+                            "Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
+                            ""), StandardCharsets.UTF_8);
+                    new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                            "-File", script.toString(), "-OldPid", String.valueOf(ProcessHandle.current().pid()),
+                            "-Exe", dst.resolve("QuickMemo.exe").toString()).directory(script.getParent().toFile()).start();
+                    Updater.log("installed " + from + " -> " + dst);
+                    System.exit(0);
+                } catch (Exception e) {
+                    pw.close();
+                    Updater.log("install failed: " + e);
+                    SwingUtilities.invokeLater(() -> Ask.notice(parent, Ask.Kind.WARN, "설치하지 못했어요", e.getMessage()));
+                }
+            }, "install");
+            t.start();
         }
 
         // ---------- 알림
@@ -5186,8 +5400,22 @@ public class QuickMemo {
                 // 정보
                 JButton open = pill(new JButton("폴더 열기"));
                 open.addActionListener(e -> { try { Desktop.getDesktop().open(app.store.dir.toFile()); } catch (Exception ignored) { } });
-                page.add(section("정보", row("버전 " + VERSION, Updater.installDir() != null ? "실행할 때 새 버전을 자동으로 받습니다" : "개발용 실행 (자동 업데이트 꺼짐)", null),
-                        row("메모 저장 위치", app.store.dir.toString().replace(System.getProperty("user.home"), "~"), open)));
+                boolean exeRun = Updater.installDir() != null;
+                JButton upd = pill(new JButton("업데이트 확인"));
+                upd.setEnabled(exeRun);
+                upd.addActionListener(e -> app.checkUpdateNow(this));
+                List<JComponent> info = new ArrayList<>();
+                info.add(row("버전 " + VERSION, exeRun ? "새 버전은 자동으로 받아요" : "개발용 실행 (자동 업데이트 꺼짐)", upd));
+                if (Installer.canInstall()) {                               // 압축을 푼 폴더에서 바로 실행 중
+                    JButton inst = pill(new JButton("설치하기"));
+                    inst.addActionListener(e -> app.installNow(this));
+                    info.add(row("이 PC에 설치", "시작 메뉴에 등록하고 한곳에 보관해요", inst));
+                }
+                String where = app.store.dir.toString().replace(System.getProperty("user.home"), "~");
+                JComponent whereRow = row("메모 저장 위치", where.length() > 30 ? "…" + where.substring(where.length() - 29) : where, open);   // 긴 경로는 앞을 줄임
+                whereRow.setToolTipText(app.store.dir.toString());
+                info.add(whereRow);
+                page.add(section("정보", info.toArray(new JComponent[0])));
 
                 JScrollPane sp = new JScrollPane(page, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
                 sp.setBorder(null);
