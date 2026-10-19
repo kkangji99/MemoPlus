@@ -84,6 +84,16 @@ public class QuickMemo {
         rp.putClientProperty("JRootPane.titleBarShowTitle", false);
         rp.putClientProperty("JRootPane.titleBarBackground", bg);
         rp.putClientProperty("JRootPane.titleBarForeground", fg);
+        // 대화상자는 제목 숨김 설정이 먹지 않아 제목을 비운다 (창 안에 제목이 따로 있음)
+        if (SwingUtilities.getWindowAncestor(rp) instanceof Dialog d) d.setTitle("");
+        else if (rp.getParent() instanceof Dialog d) d.setTitle("");
+    }
+
+    /** 둥근 알약 버튼, 파란 포커스 테두리 없이 */
+    static JButton pill(JButton b) {
+        b.putClientProperty("JButton.buttonType", "roundRect");
+        b.putClientProperty("FlatLaf.style", "focusWidth: 0; innerFocusWidth: 0; focusedBackground: $Button.background; focusedBorderColor: $Button.borderColor");
+        return b;
     }
 
     /** 실행 중에 밝게/어둡게를 바꾸면 모든 창의 테마를 다시 적용 */
@@ -764,6 +774,9 @@ public class QuickMemo {
         Long order;                    // 메모 목록 순서 (작을수록 위). null 이면 최근 수정 순
 
         boolean deleted() { return deletedAt != null; }
+
+        /** 잠긴(암호화된) 메모인지 */
+        boolean locked() { return false; }
     }
 
     // ===================================================================== 본문 마크업
@@ -1379,6 +1392,81 @@ public class QuickMemo {
         /** 메모 파일을 지운다 (아무것도 쓰지 않은 메모를 남기지 않을 때) */
         void remove(Note n) {
             try { Files.deleteIfExists(notesDir.resolve(n.id + ".note")); } catch (IOException ignored) { }
+        }
+
+        /** 그림 파일 지우기 (ID 형식이 맞을 때만, media 폴더 안에서만) */
+        void removeMedia(String id) {
+            if (!validMediaId(id)) return;
+            imageCache.remove(id);
+            try { Files.deleteIfExists(mediaDir.resolve(id + ".png")); } catch (IOException ignored) { }
+        }
+    }
+
+    /** 아래쪽에 잠깐 떴다 사라지는 알림 + 동작 버튼 (예: "휴지통으로 옮겼어요  되돌리기"). 한 번에 하나만 */
+    static final class Toast {
+        static JWindow current;
+        static Runnable currentClose;
+
+        static void show(Window anchor, String text, String action, Runnable onAction, Runnable onClose) {
+            if (current != null) close();
+            JWindow w = new JWindow(anchor);
+            if (NoteWindow.TRANSLUCENT) {
+                w.setBackground(new Color(0, 0, 0, 0));
+                w.getRootPane().setOpaque(false);
+                w.getRootPane().setBackground(new Color(0, 0, 0, 0));
+                w.getLayeredPane().setOpaque(false);
+            }
+            JPanel p = new JPanel(new BorderLayout(14, 0)) {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    g2.setColor(new Color(0x2E2A27));
+                    g2.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+                    g2.dispose();
+                }
+            };
+            p.setOpaque(false);
+            p.setBorder(new EmptyBorder(10, 20, 10, 12));
+            JLabel l = new JLabel(text);
+            l.setFont(BASE_FONT.deriveFont(13f));
+            l.setForeground(new Color(0xF4EFEA));
+            p.add(l, BorderLayout.CENTER);
+            if (action != null) {
+                JLabel a = new JLabel(action);
+                a.setFont(BASE_FONT.deriveFont(Font.BOLD, 13f));
+                a.setForeground(new Color(0xFFC46B));
+                a.setBorder(new EmptyBorder(2, 8, 2, 8));
+                a.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));
+                a.addMouseListener(new MouseAdapter() {
+                    public void mouseClicked(MouseEvent e) {
+                        close();
+                        onAction.run();
+                    }
+                });
+                p.add(a, BorderLayout.EAST);
+            }
+            w.setContentPane(p);
+            w.pack();
+            Rectangle area = anchor != null ? anchor.getBounds()
+                    : GraphicsEnvironment.getLocalGraphicsEnvironment().getMaximumWindowBounds();
+            w.setLocation(area.x + (area.width - w.getWidth()) / 2, area.y + area.height - w.getHeight() - 24);
+            w.setAlwaysOnTop(true);
+            current = w;
+            currentClose = onClose;
+            w.setVisible(true);
+            javax.swing.Timer t = new javax.swing.Timer(7000, e -> { if (current == w) close(); });
+            t.setRepeats(false);
+            t.start();
+        }
+
+        static void close() {
+            JWindow w = current;
+            Runnable r = currentClose;
+            current = null;
+            currentClose = null;
+            if (w != null) w.dispose();
+            if (r != null) r.run();
         }
     }
 
@@ -2365,6 +2453,7 @@ public class QuickMemo {
             for (Note n : new ArrayList<>(notes))                   // 예전에 남은 빈 메모(닫힌 것) 정리
                 if (!n.open && !n.deleted() && isEmptyNote(n)) { notes.remove(n); store.remove(n); }
             list = new NotesListWindow(this);
+            purgeExpiredTrash();
 
             int opened = 0;
             for (Note n : new ArrayList<>(notes)) {
@@ -2550,30 +2639,77 @@ public class QuickMemo {
             if (store.confirmDelete()) {
                 JCheckBox dontAsk = new JCheckBox("다시 묻지 않음");
                 dontAsk.setFont(BASE_FONT.deriveFont(12.5f));
-                if (!Ask.show(parent, Ask.Kind.DANGER, "이 메모를 삭제할까요?", "삭제한 메모는 되돌릴 수 없어요.", "삭제", "취소", dontAsk)) return;
+                if (!Ask.show(parent, Ask.Kind.DANGER, "이 메모를 삭제할까요?", "휴지통에서 " + TRASH_DAYS + "일 동안 되살릴 수 있어요.", "삭제", "취소", dontAsk)) return;
                 if (dontAsk.isSelected()) store.set("confirmDelete", "false");
             }
-            NoteWindow w = windows.remove(n.id);
-            if (w != null) { w.flush(); w.dispose(); }
-            n.open = false;
-            n.deletedAt = nowTicks();
-            store.save(n);
-            list.refresh();
-            checkExit();
+            deleteNotes(List.of(n));
         }
 
-        /** 여러 메모를 한 번에 삭제 (확인은 부른 쪽에서). 목록은 마지막에 한 번만 다시 그림 */
+        /** 휴지통 보관 기간. 지나면 시작할 때 완전히 지움 */
+        static final int TRASH_DAYS = 30;
+        static final long DAY_TICKS = 24L * 3600 * 10_000_000L;
+
+        /** 여러 메모를 휴지통으로 (확인은 부른 쪽에서). 목록은 마지막에 한 번만 다시 그리고 되돌리기 알림을 띄움 */
         void deleteNotes(List<Note> del) {
             long now = nowTicks();
+            List<Note> done = new ArrayList<>();
+            Map<String, Rectangle> wasOpen = new HashMap<>();
             for (Note n : del) {
                 NoteWindow w = windows.remove(n.id);
-                if (w != null) { w.flush(); w.dispose(); }
+                if (w != null) { w.flush(); wasOpen.put(n.id, w.getBounds()); w.dispose(); }
                 n.open = false;
                 n.deletedAt = now;
                 store.save(n);
+                done.add(n);
             }
             list.refresh();
-            checkExit();
+            if (!done.isEmpty()) {
+                // 지운 직후 몇 초 동안 되돌릴 수 있게. 알림이 떠 있는 동안은 앱을 끝내지 않음
+                Toast.show(list.isShowing() ? list : null, (done.size() == 1 ? "메모를" : "메모 " + done.size() + "개를") + " 휴지통으로 옮겼어요",
+                        "되돌리기", () -> restoreNotes(done, wasOpen), this::checkExit);
+            } else {
+                checkExit();
+            }
+        }
+
+        /** 휴지통에서 되살리기. 지울 때 열려 있던 메모는 다시 연다 */
+        void restoreNotes(List<Note> notesToRestore, Map<String, Rectangle> reopen) {
+            for (Note n : notesToRestore) {
+                n.deletedAt = null;
+                store.save(n);
+                if (reopen != null && reopen.containsKey(n.id)) { n.bounds = reopen.get(n.id); openNote(n); }
+            }
+            list.refresh();
+        }
+
+        List<Note> trashedNotes() {
+            List<Note> l = new ArrayList<>();
+            for (Note n : notes) if (n.deleted()) l.add(n);
+            l.sort((a, b) -> Long.compare(b.deletedAt, a.deletedAt));
+            return l;
+        }
+
+        /** 완전히 지우기: 메모 파일과, 다른 메모가 쓰지 않는 그림 파일까지 */
+        void purgeNotes(List<Note> purge) {
+            Set<String> media = new HashSet<>();
+            for (Note n : purge) {
+                media.addAll(Markup.mediaIds(n.text));
+                notes.remove(n);
+                store.remove(n);
+            }
+            if (!media.isEmpty() && notes.stream().noneMatch(Note::locked)) {   // 잠긴 메모는 그림 참조를 볼 수 없으므로 그때는 그림을 남김
+                for (Note n : notes) media.removeAll(Markup.mediaIds(n.text));
+                for (String id : media) store.removeMedia(id);
+            }
+            list.refresh();
+        }
+
+        /** 보관 기간이 지난 휴지통 메모를 완전히 지움 (시작할 때) */
+        void purgeExpiredTrash() {
+            long limit = nowTicks() - TRASH_DAYS * DAY_TICKS;
+            List<Note> old = new ArrayList<>();
+            for (Note n : notes) if (n.deleted() && n.deletedAt < limit) old.add(n);
+            if (!old.isEmpty()) purgeNotes(old);
         }
 
         /** 밝게/어둡게: 설정 저장 + 창 테마(FlatLaf) 전환 + 열린 창 다시 칠하기 */
@@ -3948,10 +4084,10 @@ public class QuickMemo {
             del.putClientProperty("JButton.buttonType", "roundRect");
             del.setBackground(new Color(0xD64545));                  // 지우는 버튼은 빨갛게
             del.setForeground(Color.WHITE);
-            del.putClientProperty("FlatLaf.style", "borderColor: #D64545; hoverBackground: #C23838; pressedBackground: #A92F2F");
+            del.putClientProperty("FlatLaf.style", "borderColor: #D64545; hoverBackground: #C23838; pressedBackground: #A92F2F; focusWidth: 0; innerFocusWidth: 0");
             del.addActionListener(e -> deleteSelection());
             JButton cancel = new JButton("취소");
-            cancel.putClientProperty("JButton.buttonType", "roundRect");
+            pill(cancel);
             for (JButton b : new JButton[]{del, cancel}) b.setMargin(new Insets(3, 12, 3, 12));   // 좁은 창에서도 선택 수가 잘리지 않게
             cancel.addActionListener(e -> setSelecting(false));
             JPanel selBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
@@ -4054,7 +4190,7 @@ public class QuickMemo {
             List<Note> del = new ArrayList<>();
             for (Card c : visibleCards()) if (selected.contains(c.note.id)) del.add(c.note);
             if (del.isEmpty()) return;
-            if (!Ask.confirm(this, Ask.Kind.DANGER, "메모 " + del.size() + "개를 삭제할까요?", "삭제한 메모는 되돌릴 수 없어요.",
+            if (!Ask.confirm(this, Ask.Kind.DANGER, "메모 " + del.size() + "개를 삭제할까요?", "휴지통에서 " + App.TRASH_DAYS + "일 동안 되살릴 수 있어요.",
                     del.size() + "개 삭제", "취소")) return;
             app.deleteNotes(del);
             setSelecting(false);
@@ -4212,15 +4348,21 @@ public class QuickMemo {
                 page.add(section("동작", row("삭제 전에 확인", "메모를 지울 때 한 번 더 묻기", new ToggleSwitch(app.store.confirmDelete(), on ->
                         app.store.set("confirmDelete", String.valueOf(on))))));
 
+                // 휴지통
+                JButton trash = pill(new JButton("열기"));
+                trash.addActionListener(e -> new TrashDialog().setVisible(true));
+                page.add(section("휴지통", row("최근 삭제한 메모 " + app.trashedNotes().size() + "개",
+                        App.TRASH_DAYS + "일이 지나면 완전히 지워져요", trash)));
+
                 // 가져오기
-                JButton imp = new JButton("가져오기");
+                JButton imp = pill(new JButton("가져오기"));
                 imp.setEnabled(StickyImport.available());
                 imp.addActionListener(e -> app.importStickyNotes(this, true));
                 page.add(section("가져오기", row("Windows 스티커 메모", StickyImport.available()
                         ? "이 PC의 스티커 메모를 QuickMemo로 복사" : "이 PC에서 스티커 메모를 찾지 못했습니다", imp)));
 
                 // 정보
-                JButton open = new JButton("폴더 열기");
+                JButton open = pill(new JButton("폴더 열기"));
                 open.addActionListener(e -> { try { Desktop.getDesktop().open(app.store.dir.toFile()); } catch (Exception ignored) { } });
                 page.add(section("정보", row("버전 " + VERSION, Updater.installDir() != null ? "실행할 때 새 버전을 자동으로 받습니다" : "개발용 실행 (자동 업데이트 꺼짐)", null),
                         row("메모 저장 위치", app.store.dir.toString().replace(System.getProperty("user.home"), "~"), open)));
@@ -4265,7 +4407,7 @@ public class QuickMemo {
                 t.setForeground(text());
                 t.setBorder(new EmptyBorder(6, 2, 6, 0));
                 t.setAlignmentX(LEFT_ALIGNMENT);
-                wrap.add(t);
+                if (title != null) wrap.add(t);                          // 제목 없는 카드 (휴지통 줄)
                 JPanel card = new JPanel() {
                     @Override
                     protected void paintComponent(Graphics g) {
@@ -4324,6 +4466,103 @@ public class QuickMemo {
                     r.add(holder, BorderLayout.EAST);
                 }
                 return r;
+            }
+
+            /** 휴지통: 지운 메모를 되살리거나 완전히 지운다 */
+            final class TrashDialog extends JDialog {
+                TrashDialog() {
+                    super(SettingsDialog.this, "휴지통", false);
+                    setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+                    build();
+                    setSize(440, 560);
+                    setLocationRelativeTo(SettingsDialog.this);
+                    NoteWindow.bind(getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), getRootPane().getActionMap(),
+                            KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "close", this::dispose);
+                }
+
+                void build() {
+                    List<Note> items = app.trashedNotes();
+                    blendTitleBar(getRootPane(), pageBg(), text());
+                    JPanel page = new TrackWidthPanel();
+                    page.setLayout(new BoxLayout(page, BoxLayout.Y_AXIS));
+                    page.setBackground(pageBg());
+                    page.setBorder(new EmptyBorder(14, 18, 16, 18));
+
+                    JPanel head = new JPanel(new BorderLayout(8, 0));
+                    head.setOpaque(false);
+                    head.setAlignmentX(LEFT_ALIGNMENT);
+                    JLabel t = new JLabel("휴지통 · " + items.size() + "개");
+                    t.setFont(BASE_FONT.deriveFont(Font.BOLD, 15f));
+                    t.setForeground(text());
+                    head.add(t, BorderLayout.WEST);
+                    JPanel acts = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
+                    acts.setOpaque(false);
+                    JButton all = new JButton("모두 되살리기");
+                    pill(all);
+                    all.addActionListener(e -> { app.restoreNotes(items, null); rebuildAll(); });
+                    JButton empty = new JButton("비우기");
+                    pill(empty);
+                    empty.setForeground(new Color(0xC43B3B));
+                    empty.addActionListener(e -> {
+                        if (Ask.confirm(this, Ask.Kind.DANGER, "휴지통을 비울까요?", "메모 " + items.size() + "개가 완전히 지워지고 되살릴 수 없어요.", "비우기", "취소")) {
+                            app.purgeNotes(items);
+                            rebuildAll();
+                        }
+                    });
+                    all.setEnabled(!items.isEmpty());
+                    empty.setEnabled(!items.isEmpty());
+                    acts.add(all);
+                    acts.add(empty);
+                    head.add(acts, BorderLayout.EAST);
+                    head.setMaximumSize(new Dimension(Integer.MAX_VALUE, head.getPreferredSize().height));
+                    page.add(head);
+                    page.add(Box.createVerticalStrut(12));
+
+                    if (items.isEmpty()) {
+                        JLabel e = new JLabel("휴지통이 비어 있어요");
+                        e.setForeground(sub());
+                        e.setBorder(new EmptyBorder(30, 4, 0, 0));
+                        page.add(e);
+                    }
+                    for (Note n : items) {
+                        String first = Markup.plain(n.text).strip().lines().findFirst().orElse("");
+                        if (n.locked()) first = "잠긴 메모";
+                        if (first.isBlank()) first = "(빈 메모)";
+                        if (first.length() > 40) first = first.substring(0, 40) + "…";
+                        long days = Math.max(0, App.TRASH_DAYS - (nowTicks() - n.deletedAt) / App.DAY_TICKS);
+                        JButton restore = new JButton("되살리기");
+                        pill(restore);
+                        restore.addActionListener(e -> { app.restoreNotes(List.of(n), null); rebuildAll(); });
+                        FlatButton purge = new FlatButton("", "완전히 지우기");
+                        purge.setIcon(new Glyph("trash", 16));
+                        purge.setForeground(new Color(0xC43B3B));
+                        purge.setPreferredSize(new Dimension(32, 28));
+                        purge.addActionListener(e -> {
+                            if (Ask.confirm(this, Ask.Kind.DANGER, "완전히 지울까요?", "이 메모는 되살릴 수 없어요.", "지우기", "취소")) {
+                                app.purgeNotes(List.of(n));
+                                rebuildAll();
+                            }
+                        });
+                        JPanel btns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 4, 0));
+                        btns.setOpaque(false);
+                        btns.add(restore);
+                        btns.add(purge);
+                        page.add(section(null, row(first, NotesListWindow.when(n.deletedAt) + " 삭제 · " + days + "일 뒤 완전 삭제", btns)));
+                    }
+                    JScrollPane sp = new JScrollPane(page, ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED, ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+                    sp.setBorder(null);
+                    sp.getViewport().setBackground(pageBg());
+                    sp.getVerticalScrollBar().setUnitIncrement(16);
+                    setContentPane(sp);
+                }
+
+                /** 휴지통과 설정(삭제한 메모 수)을 같이 새로 그림 */
+                void rebuildAll() {
+                    build();
+                    revalidate();
+                    repaint();
+                    SettingsDialog.this.rebuild();
+                }
             }
 
             /** 디자인 선택 카드: 작은 메모 미리보기 + 이름 */
