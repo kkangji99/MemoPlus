@@ -47,7 +47,7 @@ final class Glyph implements Icon {
         g2.translate(x, y);
         float s = size;
         // 통통하고 끝이 둥근 선 = 아기자기한 느낌
-        g2.setStroke(QuickMemo.cute() ? new BasicStroke(Math.max(1.6f, s / 8f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
+        g2.setStroke(MemoPlus.cute() ? new BasicStroke(Math.max(1.6f, s / 8f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND)
                 : new BasicStroke(Math.max(1.4f, s / 11f), BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
         switch (kind) {
             case "plus" -> { line(g2, .24, .5, .76, .5); line(g2, .5, .24, .5, .76); }
@@ -75,8 +75,8 @@ final class Glyph implements Icon {
                 line(g2, .58, .58, .84, .84);
             }
             case "heart" -> {
-                Shape h = QuickMemo.NoteShape.Heart.outline(s * .1, s * .14, s * .8, s * .74);
-                g2.setColor(QuickMemo.PINK);
+                Shape h = MemoPlus.NoteShape.Heart.outline(s * .1, s * .14, s * .8, s * .74);
+                g2.setColor(MemoPlus.PINK);
                 g2.fill(h);
             }
             case "lock" -> {                                     // 자물쇠
@@ -90,7 +90,7 @@ final class Glyph implements Icon {
             case "tree" -> {                                     // 크리스마스 트리: 3단 초록 + 금별 + 빨간 장식
                 g2.setColor(new Color(0x8B5A2B));
                 g2.fill(new java.awt.geom.Rectangle2D.Double(s * .44, s * .8, s * .12, s * .14));
-                g2.setColor(QuickMemo.XMAS_GREEN);
+                g2.setColor(MemoPlus.XMAS_GREEN);
                 for (double[] tier : new double[][]{{.16, .24, .5}, {.32, .16, .66}, {.5, .08, .84}}) {
                     java.awt.geom.Path2D.Double tri = new java.awt.geom.Path2D.Double();
                     tri.moveTo(s * .5, s * tier[0]);
@@ -99,11 +99,11 @@ final class Glyph implements Icon {
                     tri.closePath();
                     g2.fill(tri);
                 }
-                g2.setColor(QuickMemo.XMAS_RED);
+                g2.setColor(MemoPlus.XMAS_RED);
                 dot(g2, .4, .52, .045);
                 dot(g2, .62, .68, .045);
-                g2.setColor(QuickMemo.XMAS_GOLD);
-                g2.fill(QuickMemo.NoteShape.Star.outline(s * .38, s * .02, s * .24, s * .22));
+                g2.setColor(MemoPlus.XMAS_GOLD);
+                g2.fill(MemoPlus.NoteShape.Star.outline(s * .38, s * .02, s * .24, s * .22));
             }
             case "blossom" -> Deco.blossom(g2, s * .5, s * .5, s * .46, new Color(0xF48FB1));
             case "sun" -> {
@@ -133,7 +133,7 @@ final class Glyph implements Icon {
                 }
             }
             case "star", "starFilled" -> {
-                Shape st = QuickMemo.NoteShape.Star.outline(s * .06, s * .04, s * .88, s * .88);
+                Shape st = MemoPlus.NoteShape.Star.outline(s * .06, s * .04, s * .88, s * .88);
                 if (kind.equals("starFilled")) {
                     g2.setColor(new Color(0xFFCB45));
                     g2.fill(st);
@@ -158,13 +158,13 @@ final class Glyph implements Icon {
                 line(g2, .57, .45, .57, .7);
             }
             case "pin" -> {                                      // 심플: 선 압정 / 아기자기: 분홍 머리 압정
-                if (!QuickMemo.cute()) {
+                if (!MemoPlus.cute()) {
                     poly(g2, new double[]{.38, .62, .62, .72, .28, .38}, new double[]{.14, .14, .48, .62, .62, .48});
                     line(g2, .5, .62, .5, .88);
                     break;
                 }
                 line(g2, .5, .55, .5, .9);
-                g2.setColor(QuickMemo.styleAccent());
+                g2.setColor(MemoPlus.styleAccent());
                 g2.fill(new java.awt.geom.Ellipse2D.Double(s * .22, s * .08, s * .56, s * .5));
                 g2.setColor(new Color(255, 255, 255, 170));
                 g2.fill(new java.awt.geom.Ellipse2D.Double(s * .33, s * .17, s * .14, s * .12));
@@ -187,7 +187,7 @@ final class Glyph implements Icon {
             case "image" -> {                                    // 노란 해와 언덕
                 g2.draw(new java.awt.geom.RoundRectangle2D.Double(s * .1, s * .16, s * .8, s * .68, s * .24, s * .24));
                 poly(g2, new double[]{.18, .4, .55, .64, .82}, new double[]{.74, .5, .64, .56, .72});
-                g2.setColor(QuickMemo.cute() ? new Color(0xFFC93C) : fg);
+                g2.setColor(MemoPlus.cute() ? new Color(0xFFC93C) : fg);
                 g2.fill(new java.awt.geom.Ellipse2D.Double(s * .56, s * .27, s * .17, s * .17));
             }
             default -> { }
@@ -236,9 +236,9 @@ final class CheckIcon implements Icon {
         Color fg = c != null ? c.getForeground() : Color.DARK_GRAY;
         // 메모 테마의 포인트 색 (JTextPane 의 client property "accent")
         Color accent = c instanceof JComponent jc && jc.getClientProperty("accent") instanceof Color a ? a : fg;
-        double arc = QuickMemo.cute() ? 7 : 4;
+        double arc = MemoPlus.cute() ? 7 : 4;
         java.awt.geom.RoundRectangle2D box = new java.awt.geom.RoundRectangle2D.Double(x + 0.75, y + 1.75, BOX - 1.5, BOX - 1.5, arc, arc);
-        if (!QuickMemo.cute()) {                                         // 심플: 회색 테두리 / 채운 회색 + 흰 체크
+        if (!MemoPlus.cute()) {                                         // 심플: 회색 테두리 / 채운 회색 + 흰 체크
             if (done) {
                 g2.setColor(new Color(fg.getRed(), fg.getGreen(), fg.getBlue(), 150));
                 g2.fill(box);

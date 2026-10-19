@@ -4,15 +4,15 @@ import java.lang.invoke.MethodHandle;
 /**
  * 어디서든 누르는 전역 단축키 (Windows RegisterHotKey).
  * 추가 라이브러리 없이 JDK 의 외부 함수 API(java.lang.foreign, JDK 21 에서는 미리보기)로 user32.dll 을 부른다.
- * 이 파일만 --enable-preview 로 컴파일하고, QuickMemo 는 반사로 불러 실패하면(미리보기 꺼짐 등) 단축키 없이 동작한다.
+ * 이 파일만 --enable-preview 로 컴파일하고, 메모플러스 는 반사로 불러 실패하면(미리보기 꺼짐 등) 단축키 없이 동작한다.
  */
-public final class QuickMemoHotkey {
+public final class MemoPlusHotkey {
     static final int MOD_ALT = 0x1, MOD_CONTROL = 0x2, MOD_NOREPEAT = 0x4000, WM_HOTKEY = 0x0312;
 
     /** 메시지를 기다리는 스레드의 Win32 ID (테스트에서 WM_HOTKEY 를 직접 보내 확인할 때) */
     public static volatile int threadId;
 
-    private QuickMemoHotkey() { }
+    private MemoPlusHotkey() { }
 
     /** 단축키 해제: 기다리는 스레드에 WM_QUIT 를 보내 끝내면 그 스레드가 해제한다 */
     public static void stop() throws Throwable {

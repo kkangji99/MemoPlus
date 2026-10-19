@@ -33,7 +33,7 @@ final class Toast {
     static void show(Window anchor, String text, String action, Runnable onAction, Runnable onClose) {
         if (current != null) close();
         JWindow w = new JWindow(anchor);
-        if (QuickMemo.NoteWindow.TRANSLUCENT) {
+        if (MemoPlus.NoteWindow.TRANSLUCENT) {
             w.setBackground(new Color(0, 0, 0, 0));
             w.getRootPane().setOpaque(false);
             w.getRootPane().setBackground(new Color(0, 0, 0, 0));
@@ -52,12 +52,12 @@ final class Toast {
         p.setOpaque(false);
         p.setBorder(new EmptyBorder(10, 20, 10, 12));
         JLabel l = new JLabel(text);
-        l.setFont(QuickMemo.BASE_FONT.deriveFont(13f));
+        l.setFont(MemoPlus.BASE_FONT.deriveFont(13f));
         l.setForeground(new Color(0xF4EFEA));
         p.add(l, BorderLayout.CENTER);
         if (action != null) {
             JLabel a = new JLabel(action);
-            a.setFont(QuickMemo.BASE_FONT.deriveFont(Font.BOLD, 13f));
+            a.setFont(MemoPlus.BASE_FONT.deriveFont(Font.BOLD, 13f));
             a.setForeground(new Color(0xFFC46B));
             a.setBorder(new EmptyBorder(2, 8, 2, 8));
             a.setCursor(Cursor.getPredefinedCursor(Cursor.HAND_CURSOR));

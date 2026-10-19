@@ -26,20 +26,23 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * MSI 없이 스스로 설치: 압축을 푼 곳에서 실행 중이면 %LOCALAPPDATA%\Programs\QuickMemo 로 복사해 다시 실행.
- * exe 로 실행될 때마다 "앱 및 기능" 목록(HKCU Uninstall)에 등록하고, 제거는 QuickMemo.exe --uninstall.
- * 제거는 앱 파일(QuickMemo.exe, app, runtime)만 지우고 메모(%APPDATA%\QuickMemo)는 남긴다.
+ * MSI 없이 스스로 설치: 압축을 푼 곳에서 실행 중이면 %LOCALAPPDATA%\Programs\MemoPlus 로 복사해 다시 실행.
+ * exe 로 실행될 때마다 "앱 및 기능" 목록(HKCU Uninstall)에 등록하고, 제거는 MemoPlus.exe --uninstall.
+ * 제거는 앱 파일(MemoPlus.exe, app, runtime)만 지우고 메모(%APPDATA%\MemoPlus)는 남긴다.
  */
 final class Installer {
     /** 테스트에서 실제 레지스트리를 건드리지 않게 바꿀 수 있음 */
-    static final String KEY = System.getProperty("quickmemo.uninstallKey", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QuickMemo");
-    /** jpackage app-image 의 내용. 제거할 때 이것만 지운다 (다른 파일이 있는 폴더를 통째로 지우지 않게) */
-    static final String[] APP_FILES = {"QuickMemo.exe", "QuickMemo.ico", "app", "runtime"};
+    static final String KEY = System.getProperty("memoplus.uninstallKey", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\MemoPlus");
+    /**
+     * jpackage app-image 의 내용. 제거할 때 이것만 지운다 (다른 파일이 있는 폴더를 통째로 지우지 않게).
+     * QuickMemo.exe 는 1.0.x 의 업데이터가 새 버전을 찾을 수 있게 같이 넣는 예전 이름의 실행 파일
+     */
+    static final String[] APP_FILES = {"MemoPlus.exe", "QuickMemo.exe", "MemoPlus.ico", "QuickMemo.ico", "app", "runtime"};
 
     /** 표준 설치 위치 */
     static Path home() {
         String la = System.getenv("LOCALAPPDATA");
-        return la == null ? null : Paths.get(la, "Programs", "QuickMemo");
+        return la == null ? null : Paths.get(la, "Programs", "MemoPlus");
     }
 
     /** exe 로 실행 중인데 표준 위치가 아닌 곳(다운로드 폴더 등)이면 true */
@@ -48,17 +51,18 @@ final class Installer {
         return dir != null && h != null && !dir.toAbsolutePath().normalize().equals(h.toAbsolutePath().normalize());
     }
 
-    /** QuickMemo 앱 폴더가 맞는지 (exe + app\QuickMemo.jar + runtime) */
+    /** 메모플러스 앱 폴더가 맞는지 (exe + app\*.jar + runtime). 1.0.x 의 QuickMemo 폴더 모양도 인정 */
     static boolean isAppDir(Path dir) {
-        return dir != null && Files.isRegularFile(dir.resolve("QuickMemo.exe")) && Files.isRegularFile(dir.resolve("app").resolve("QuickMemo.jar"))
-                && Files.isDirectory(dir.resolve("runtime"));
+        if (dir == null || !Files.isDirectory(dir.resolve("runtime"))) return false;
+        return Files.isRegularFile(dir.resolve("MemoPlus.exe")) && Files.isRegularFile(dir.resolve("app").resolve("MemoPlus.jar"))
+                || Files.isRegularFile(dir.resolve("QuickMemo.exe")) && Files.isRegularFile(dir.resolve("app").resolve("QuickMemo.jar"));
     }
 
     /** 지금 실행 중인 앱 폴더를 표준 위치로 복사 (있던 앱 파일은 바꿈) */
     static Path copyToHome() throws IOException {
         Path src = Updater.installDir(), dst = home();
-        if (!isAppDir(src) || dst == null) throw new IOException("설치할 QuickMemo 파일을 찾지 못했어요.");
-        Path staging = dst.resolveSibling("QuickMemo.install");
+        if (!isAppDir(src) || dst == null) throw new IOException("설치할 메모플러스 파일을 찾지 못했어요.");
+        Path staging = dst.resolveSibling("MemoPlus.install");
         Updater.deleteTree(staging);
         Path root = src.toAbsolutePath().normalize();
         try (var walk = Files.walk(root)) {
@@ -81,8 +85,9 @@ final class Installer {
 
     /** "앱 및 기능" 목록에 등록 (버전·위치가 바뀌면 다시) */
     static boolean register(Path dir) {
-        String exe = dir.resolve("QuickMemo.exe").toString();
-        String[][] values = {{"DisplayName", "REG_SZ", "QuickMemo"}, {"DisplayVersion", "REG_SZ", QuickMemo.VERSION}, {"Publisher", "REG_SZ", "QuickMemo"},
+        String exe = Updater.exeIn(dir).toString();
+        String[][] values = {{"DisplayName", "REG_SZ", MemoPlus.APP_NAME + " (" + MemoPlus.APP_NAME_EN + ")"}, {"DisplayVersion", "REG_SZ", MemoPlus.VERSION},
+                {"Publisher", "REG_SZ", "MemoPlus"},
                 {"DisplayIcon", "REG_SZ", exe}, {"InstallLocation", "REG_SZ", dir.toString()},
                 {"UninstallString", "REG_SZ", "\"" + exe + "\" --uninstall"}, {"NoModify", "REG_DWORD", "1"}, {"NoRepair", "REG_DWORD", "1"}};
         boolean ok = true;
@@ -109,34 +114,34 @@ final class Installer {
         }
     }
 
-    /** QuickMemo.exe --uninstall: 확인 → 바로가기·등록 삭제 → 끝난 뒤 앱 파일 삭제 */
+    /** MemoPlus.exe --uninstall: 확인 → 바로가기·등록 삭제 → 끝난 뒤 앱 파일 삭제 */
     static void uninstall() throws Exception {
         Path dir = Updater.installDir();
         boolean[] go = new boolean[1];
         SwingUtilities.invokeAndWait(() -> {
             if (Updater.anotherInstanceRunning()) {
-                Ask.notice(null, Ask.Kind.WARN, "QuickMemo가 실행 중이에요", "알림 영역의 QuickMemo 아이콘에서 종료한 뒤 다시 제거해 주세요.");
+                Ask.notice(null, Ask.Kind.WARN, "메모플러스가 실행 중이에요", "알림 영역의 메모플러스 아이콘에서 종료한 뒤 다시 제거해 주세요.");
                 return;
             }
-            go[0] = Ask.confirm(null, Ask.Kind.DANGER, "QuickMemo를 제거할까요?",
-                    "메모는 지우지 않아요.\n" + QuickMemo.Store.dataDir(), "제거", "취소");
+            go[0] = Ask.confirm(null, Ask.Kind.DANGER, "메모플러스를 제거할까요?",
+                    "메모는 지우지 않아요.\n" + MemoPlus.Store.dataDir(), "제거", "취소");
         });
         if (!go[0]) return;
         String appData = System.getenv("APPDATA");
         if (appData != null) {
             Path menu = Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs");
-            Files.deleteIfExists(menu.resolve(QuickMemo.App.START_MENU_NAME));
-            Files.deleteIfExists(menu.resolve("Startup").resolve("QuickMemo.lnk"));
+            for (String n : new String[]{MemoPlus.App.START_MENU_NAME, MemoPlus.App.OLD_START_MENU_NAME}) Files.deleteIfExists(menu.resolve(n));
+            for (String n : new String[]{"MemoPlus.lnk", MemoPlus.App.OLD_AUTO_START_NAME}) Files.deleteIfExists(menu.resolve("Startup").resolve(n));
         }
         unregister();
         if (isAppDir(dir)) scheduleRemove(dir, ProcessHandle.current().pid());   // 실행 중인 파일은 지울 수 없으므로 끝난 뒤 지운다
-        SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.INFO, "QuickMemo를 제거했어요", "메모는 " + QuickMemo.Store.dataDir() + " 에 남아 있어요."));
+        SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.INFO, "메모플러스를 제거했어요", "메모는 " + MemoPlus.Store.dataDir() + " 에 남아 있어요."));
     }
 
     /** pid 프로세스가 끝나면 앱 파일만 지우고, 폴더가 비면 폴더도 지운다 */
     static Process scheduleRemove(Path dir, long pid) throws IOException {
         {
-            Path script = Files.createTempFile("QuickMemo-uninstall-", ".ps1");
+            Path script = Files.createTempFile("MemoPlus-uninstall-", ".ps1");
             Files.writeString(script, String.join("\r\n",
                     "param([int]$OldPid, [string]$Dir)",
                     "try { Wait-Process -Id $OldPid -Timeout 60 -ErrorAction SilentlyContinue } catch {}",

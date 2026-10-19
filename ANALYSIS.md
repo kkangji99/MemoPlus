@@ -23,9 +23,9 @@
 - 색상 HEX 값은 바이너리에서 문자열로 나오지 않아(컴파일된 XAML) **근사값**으로 지정.
 - 단축키 조합(Ctrl+B/I/U/T, Ctrl+Shift+L 등)은 일반적으로 알려진 값 기준 — 바이너리에서 직접 확인하지 않음.
 - 클라우드 동기화, 펜 잉크(Stroke), Insight 는 제외.
-- 이미지: 원본 Media 테이블(`LocalFileRelativePath`, `LocalState\media` 폴더)처럼 `%APPDATA%\QuickMemo\media\<id>.png` 파일로 두고, 본문에는 `\img=<id>` 토큰으로 위치를 기록 (원본은 이미지를 본문 위 갤러리로 보여 주지만, 여기서는 본문 중간에 넣는 방식).
+- 이미지: 원본 Media 테이블(`LocalFileRelativePath`, `LocalState\media` 폴더)처럼 `%APPDATA%\MemoPlus\media\<id>.png` 파일로 두고, 본문에는 `\img=<id>` 토큰으로 위치를 기록 (원본은 이미지를 본문 위 갤러리로 보여 주지만, 여기서는 본문 중간에 넣는 방식).
 - 아이콘은 글꼴 글리프 대신 직접 그린 벡터 아이콘 사용 (맑은 고딕에 ⋯ ✕ 등 기호가 없어 깨짐).
-- 저장은 SQLite 대신 노트별 텍스트 파일(`%APPDATA%\QuickMemo\notes\<id>.note`), 본문은 원본과 같은 `\id=` + 토큰 방식.
+- 저장은 SQLite 대신 노트별 텍스트 파일(`%APPDATA%\MemoPlus\notes\<id>.note`), 본문은 원본과 같은 `\id=` + 토큰 방식.
 
 ## 미확인
 

@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 final class Deco {
     static final int H = 18;
 
-    static void band(Graphics2D g, QuickMemo.Style s, QuickMemo.Theme t, int w, int bottom) {
+    static void band(Graphics2D g, MemoPlus.Style s, MemoPlus.Theme t, int w, int bottom) {
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         g2.setStroke(new BasicStroke(1.6f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
@@ -47,7 +47,7 @@ final class Deco {
                 g2.setColor(new Color(0x2E6B45));
                 g2.setStroke(new BasicStroke(2f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
                 g2.draw(rope);
-                Color[] cs = {QuickMemo.XMAS_RED, QuickMemo.XMAS_GOLD, QuickMemo.XMAS_GREEN};
+                Color[] cs = {MemoPlus.XMAS_RED, MemoPlus.XMAS_GOLD, MemoPlus.XMAS_GREEN};
                 for (int i = 0, x = step / 2; x < w; i++, x += step) {
                     double cy = y0 + sag + 6, r = 5;
                     g2.setColor(new Color(0xB8B8B8));
@@ -135,7 +135,7 @@ final class Deco {
         g2.dispose();
     }
 
-    static void pattern(Graphics2D g, QuickMemo.Style s, QuickMemo.Theme t, long seed, int w, int top, int h) {
+    static void pattern(Graphics2D g, MemoPlus.Style s, MemoPlus.Theme t, long seed, int w, int top, int h) {
         Graphics2D g2 = (Graphics2D) g.create();
         g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
         Random rnd = new Random(seed);

@@ -93,7 +93,10 @@ final class Crypto {
         }
     }
 
-    /** DPAPI 보호/해제. 데이터는 표준 입력·출력(base64)으로만 */
+    /**
+     * DPAPI 보호/해제. 데이터는 표준 입력·출력(base64)으로만.
+     * 추가 엔트로피 'QuickMemo' 는 이름을 바꾼 뒤에도 그대로 둔다 (바꾸면 이미 잠근 메모의 키를 풀 수 없음)
+     */
     static byte[] dpapi(boolean protect, byte[] data) throws Exception {
         String op = protect ? "Protect" : "Unprotect";
         String script = "$ErrorActionPreference='Stop'; Add-Type -AssemblyName System.Security; "

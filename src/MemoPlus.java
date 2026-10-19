@@ -26,19 +26,23 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Microsoft Sticky Notes 를 분석(REA)해 기능을 재구성한 메모 프로그램 QuickMemo.
- * 실행: java QuickMemo.java  (JDK 21+)
+ * 메모플러스 (Memo+) — 메모를 더 편리하게.
+ * Microsoft Sticky Notes 를 분석(REA)해 기능을 재구성한 메모 프로그램 (1.0.x 까지의 이름은 QuickMemo).
+ * 빌드: build.bat  (JDK 21+)
  */
-public class QuickMemo {
+public class MemoPlus {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
     static final String VERSION = "1.0.17";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
-    static final String UPDATE_REPO = "kkangji99/QuickMemo";
+    static final String UPDATE_REPO = "kkangji99/MemoPlus";
+    /** 이름을 바꾸기 전 저장소 (그때 올린 릴리스 주소도 믿는다) */
+    static final String OLD_REPO = "kkangji99/QuickMemo";
     /** 화면에 보이는 이름과 슬로건 */
     static final String APP_NAME = "메모플러스", APP_NAME_EN = "Memo+", SLOGAN = "메모를 더 편리하게";
 
     public static void main(String[] args) throws Exception {
+        Store.migrateDataDir();                         // QuickMemo 시절 메모 폴더를 새 이름으로 (처음 한 번)
         boolean dark = false;                          // 글꼴 안티앨리어싱은 Windows(ClearType) 설정을 따른다: 회색조로 강제하면 맑은 고딕 획이 빠짐
         try (var r = Files.newBufferedReader(Store.dataDir().resolve("settings.properties"), StandardCharsets.UTF_8)) {
             Properties p = new Properties();
@@ -533,9 +537,23 @@ public class QuickMemo {
             }
         }
 
-        static Path dataDir() {
+        static Path dataRoot() {
             String base = System.getenv("APPDATA");
-            return Paths.get(base != null ? base : System.getProperty("user.home"), "QuickMemo");
+            return Paths.get(base != null ? base : System.getProperty("user.home"));
+        }
+
+        /** %APPDATA%\MemoPlus. 예전 폴더(QuickMemo)를 아직 옮기지 못했으면(다른 창이 쓰는 중) 그 폴더를 그대로 쓴다 */
+        static Path dataDir() {
+            Path dir = dataRoot().resolve("MemoPlus"), old = dataRoot().resolve("QuickMemo");
+            return !Files.exists(dir) && Files.isDirectory(old) ? old : dir;
+        }
+
+        /** 이름을 바꾸기 전 메모 폴더를 통째로 옮긴다 (같은 드라이브 안의 이름 바꾸기라 메모를 복사하지 않음) */
+        static void migrateDataDir() {
+            Path dir = dataRoot().resolve("MemoPlus"), old = dataRoot().resolve("QuickMemo");
+            if (Files.exists(dir) || !Files.isDirectory(old)) return;
+            try { Files.move(old, dir, StandardCopyOption.ATOMIC_MOVE); }
+            catch (IOException e) { System.err.println("메모 폴더를 옮기지 못함 (다음 실행 때 다시): " + e); }
         }
 
         boolean darkMode() { return Boolean.parseBoolean(settings.getProperty("darkMode", "false")); }
@@ -553,7 +571,7 @@ public class QuickMemo {
         void set(String k, String v) {
             settings.setProperty(k, v);
             try (var w = Files.newBufferedWriter(settingsFile, StandardCharsets.UTF_8)) {
-                settings.store(w, "QuickMemo settings");
+                settings.store(w, "MemoPlus settings");
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -1034,7 +1052,7 @@ public class QuickMemo {
                 FileChannel ch = FileChannel.open(store.dir.resolve(".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                 lock = ch.tryLock();
                 if (lock == null) {
-                    Ask.notice(null, Ask.Kind.INFO, "QuickMemo가 이미 실행 중이에요", "열려 있는 메모나 메모 목록을 사용해 주세요.");
+                    Ask.notice(null, Ask.Kind.INFO, "메모플러스가 이미 실행 중이에요", "열려 있는 메모나 메모 목록을 사용해 주세요.");
                     System.exit(0);
                 }
             } catch (IOException e) {
@@ -1079,7 +1097,9 @@ public class QuickMemo {
         }
 
         /** 시작 메뉴 바로가기 이름. 윈도우 검색에서 "memo", "메모" 로 찾을 수 있게 두 단어를 모두 넣음 */
-        static final String START_MENU_NAME = "Quick Memo (메모).lnk";
+        static final String START_MENU_NAME = "메모플러스 (Memo+).lnk";
+        /** 이름을 바꾸기 전 바로가기 (새 바로가기를 만들면 지움) */
+        static final String OLD_START_MENU_NAME = "Quick Memo (메모).lnk", OLD_AUTO_START_NAME = "QuickMemo.lnk";
 
         /**
          * exe 로 실행 중이면 시작 메뉴에 바로가기를 만들거나 경로를 고친다 (백그라운드, 실패해도 무시).
@@ -1089,15 +1109,18 @@ public class QuickMemo {
             Path dir = Updater.installDir();
             String appData = System.getenv("APPDATA");
             if (dir == null || appData == null) return;
-            Path exe = dir.resolve("QuickMemo.exe");
-            Path lnk = Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs", START_MENU_NAME);
+            Path exe = Updater.exeIn(dir);
+            Path menu = Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs");
+            Path lnk = menu.resolve(START_MENU_NAME);
             String mark = exe + "|" + VERSION;                         // 위치나 버전이 바뀌면 다시 등록
             if (mark.equals(store.settings.getProperty("startMenuTarget")) && Files.exists(lnk)) return;
             store.set("startMenuTarget", mark);
             boolean auto = autoStart();
             Thread t = new Thread(() -> {
                 boolean ok = makeShortcut(lnk, exe, dir);
-                if (auto) makeShortcut(autoStartLink(), exe, dir);      // 자동 실행 바로가기도 새 위치로
+                if (ok) try { Files.deleteIfExists(menu.resolve(OLD_START_MENU_NAME)); } catch (IOException ignored) { }   // QuickMemo 시절 바로가기
+                if (auto && makeShortcut(autoStartLink(), exe, dir))   // 자동 실행 바로가기도 새 위치·이름으로
+                    try { Files.deleteIfExists(autoStartLink().resolveSibling(OLD_AUTO_START_NAME)); } catch (IOException ignored) { }
                 boolean reg = Installer.register(dir);
                 Updater.log("start menu shortcut: " + lnk + " -> " + exe + " (" + ok + "), uninstall entry (" + reg + ")");
             }, "start-menu");
@@ -1109,7 +1132,7 @@ public class QuickMemo {
         static boolean makeShortcut(Path lnk, Path exe, Path workDir) {
             try {
                 Files.createDirectories(lnk.getParent());
-                Path script = Files.createTempFile("QuickMemo-shortcut-", ".ps1");
+                Path script = Files.createTempFile("MemoPlus-shortcut-", ".ps1");
                 Files.writeString(script, String.join("\r\n",
                         "param([string]$Lnk, [string]$Exe, [string]$Dir)",
                         "$ErrorActionPreference = 'Stop'",
@@ -1117,7 +1140,7 @@ public class QuickMemo {
                         "$s.TargetPath = $Exe",
                         "$s.WorkingDirectory = $Dir",
                         "$s.IconLocation = \"$Exe,0\"",
-                        "$s.Description = 'QuickMemo'",
+                        "$s.Description = 'Memo+'",                 // 스크립트는 BOM 없는 UTF-8 이라 PowerShell 5 에서 한글이 깨지므로 영문
                         "$s.Save()",
                         ""), StandardCharsets.UTF_8);
                 Process p = new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
@@ -1139,17 +1162,24 @@ public class QuickMemo {
         /** 시작 프로그램 폴더의 바로가기 (Windows 로그인하면 실행) */
         static Path autoStartLink() {
             String appData = System.getenv("APPDATA");
-            return appData == null ? null : Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "QuickMemo.lnk");
+            return appData == null ? null : Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "MemoPlus.lnk");
         }
 
-        boolean autoStart() { Path l = autoStartLink(); return l != null && Files.exists(l); }
+        /** 새 이름이나 QuickMemo 시절 이름의 자동 실행 바로가기가 있으면 켜진 것 */
+        boolean autoStart() {
+            Path l = autoStartLink();
+            return l != null && (Files.exists(l) || Files.exists(l.resolveSibling(OLD_AUTO_START_NAME)));
+        }
 
         /** 켜기: exe 로 실행 중일 때만 (jar 개발 실행은 바로가기 대상이 없음). 결과를 돌려줌 */
         boolean setAutoStart(boolean on) {
             Path lnk = autoStartLink(), dir = Updater.installDir();
             if (lnk == null) return false;
-            if (!on) { try { Files.deleteIfExists(lnk); } catch (IOException ignored) { } return !Files.exists(lnk); }
-            return dir != null && makeShortcut(lnk, dir.resolve("QuickMemo.exe"), dir);
+            if (!on) {
+                try { Files.deleteIfExists(lnk); Files.deleteIfExists(lnk.resolveSibling(OLD_AUTO_START_NAME)); } catch (IOException ignored) { }
+                return !autoStart();
+            }
+            return dir != null && makeShortcut(lnk, Updater.exeIn(dir), dir);
         }
 
         boolean trayEnabled() { return !"false".equals(store.settings.getProperty("tray")); }
@@ -1178,7 +1208,7 @@ public class QuickMemo {
             m.add(ls);
             m.addSeparator();
             m.add(quit);
-            TrayIcon t = new TrayIcon(appIcon(32, Theme.Yellow), "QuickMemo", m);
+            TrayIcon t = new TrayIcon(appIcon(32, Theme.Yellow), APP_NAME, m);
             t.setImageAutoSize(true);
             t.addActionListener(e -> SwingUtilities.invokeLater(this::showList));
             try {
@@ -1191,11 +1221,11 @@ public class QuickMemo {
 
         boolean hotkeyEnabled() { return !"false".equals(store.settings.getProperty("hotkey")); }
 
-        /** Ctrl+Alt+M 새 메모. QuickMemoHotkey(미리보기 기능 필요)를 못 쓰면 조용히 꺼짐 */
+        /** Ctrl+Alt+M 새 메모. MemoPlusHotkey(미리보기 기능 필요)를 못 쓰면 조용히 꺼짐 */
         void setHotkey(boolean on) {
             store.set("hotkey", String.valueOf(on));
             try {
-                Class<?> hk = Class.forName("QuickMemoHotkey");
+                Class<?> hk = Class.forName("MemoPlusHotkey");
                 if (!on) {
                     hk.getMethod("stop").invoke(null);
                     hotkeyOn = false;
@@ -1435,7 +1465,7 @@ public class QuickMemo {
                 SwingUtilities.invokeLater(() -> {
                     if (r.version().equals(offeredVersion)) return;
                     offeredVersion = r.version();
-                    Toast.show(list.isShowing() ? list : null, "QuickMemo " + r.version() + " 버전이 나왔어요", "업데이트", () -> updateNow(r), null);
+                    Toast.show(list.isShowing() ? list : null, "메모플러스 " + r.version() + " 버전이 나왔어요", "업데이트", () -> updateNow(r), null);
                 });
             }, "update-check");
             t.setDaemon(true);
@@ -1444,7 +1474,7 @@ public class QuickMemo {
 
         /** 설정의 "업데이트 확인" */
         void checkUpdateNow(Component parent) {
-            if (Updater.installDir() == null) { Ask.notice(parent, Ask.Kind.INFO, "개발용 실행이에요", "설치된 QuickMemo(exe)에서만 업데이트할 수 있어요."); return; }
+            if (Updater.installDir() == null) { Ask.notice(parent, Ask.Kind.INFO, "개발용 실행이에요", "설치된 메모플러스(exe)에서만 업데이트할 수 있어요."); return; }
             Thread t = new Thread(() -> {
                 Updater.Release r;
                 try { r = Updater.latest(); } catch (Exception e) { r = null; }
@@ -1463,7 +1493,7 @@ public class QuickMemo {
         void updateNow(Updater.Release r) {
             Path dir = Updater.installDir();
             if (dir == null) return;
-            if (!Ask.confirm(list.isShowing() ? list : null, Ask.Kind.QUESTION, "QuickMemo " + r.version() + "로 업데이트할까요?",
+            if (!Ask.confirm(list.isShowing() ? list : null, Ask.Kind.QUESTION, "메모플러스 " + r.version() + "로 업데이트할까요?",
                     "메모를 저장하고 다시 실행해요.", "업데이트", "나중에")) return;
             for (NoteWindow w : windows.values()) w.flush();
             releaseLock();                                           // 업데이트 스크립트가 새 버전을 띄울 수 있게
@@ -1488,7 +1518,7 @@ public class QuickMemo {
             if (!Ask.confirm(parent, Ask.Kind.QUESTION, "이 PC에 설치할까요?",
                     to + " 에 설치하고 시작 메뉴에 등록해요.\n설치한 뒤에는 지금 폴더를 지워도 돼요.", "설치", "취소")) return;
             Thread t = new Thread(() -> {
-                Updater.Progress pw = Updater.Progress.show("QuickMemo 설치 중...");
+                Updater.Progress pw = Updater.Progress.show("메모플러스 설치 중...");
                 try {
                     Path dst = Installer.copyToHome();
                     pw.close();
@@ -1496,7 +1526,7 @@ public class QuickMemo {
                         for (NoteWindow w : windows.values()) w.flush();
                         releaseLock();
                     });
-                    Path script = Files.createTempFile("QuickMemo-relaunch-", ".ps1");
+                    Path script = Files.createTempFile("MemoPlus-relaunch-", ".ps1");
                     Files.writeString(script, String.join("\r\n",
                             "param([int]$OldPid, [string]$Exe)",
                             "try { Wait-Process -Id $OldPid -Timeout 60 -ErrorAction SilentlyContinue } catch {}",
@@ -1505,7 +1535,7 @@ public class QuickMemo {
                             ""), StandardCharsets.UTF_8);
                     new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
                             "-File", script.toString(), "-OldPid", String.valueOf(ProcessHandle.current().pid()),
-                            "-Exe", dst.resolve("QuickMemo.exe").toString()).directory(script.getParent().toFile()).start();
+                            "-Exe", dst.resolve("MemoPlus.exe").toString()).directory(script.getParent().toFile()).start();
                     Updater.log("installed " + from + " -> " + dst);
                     System.exit(0);
                 } catch (Exception e) {
@@ -1545,7 +1575,7 @@ public class QuickMemo {
             String title = n.locked() ? "잠긴 메모" : Markup.plain(n.text).strip().split("\n")[0];   // 잠긴 메모는 내용을 알림에 보이지 않음
             if (title.isBlank()) title = "메모";
             if (title.length() > 24) title = title.substring(0, 24) + "…";
-            if (tray != null) tray.displayMessage("QuickMemo 알림", title, TrayIcon.MessageType.INFO);
+            if (tray != null) tray.displayMessage("메모플러스 알림", title, TrayIcon.MessageType.INFO);
             Toast.show(null, "알림 · " + title, "10분 뒤 다시", () -> setReminder(n, System.currentTimeMillis() + 10 * 60_000L), null);
         }
 
@@ -1678,7 +1708,7 @@ public class QuickMemo {
         boolean dirtyText;
 
         NoteWindow(App app, Note note) {
-            super("QuickMemo");
+            super(APP_NAME);
             this.app = app;
             this.note = note;
             setUndecorated(true);
@@ -3152,12 +3182,12 @@ public class QuickMemo {
         };
         final JPanel cards = new JPanel();
         final JPanel top = new JPanel(new BorderLayout());
-        final JLabel title = new JLabel("QuickMemo");
+        final JLabel title = new JLabel(APP_NAME_EN);
         final JScrollPane scroll;
         final List<FlatButton> buttons = new ArrayList<>();
 
         NotesListWindow(App app) {
-            super("QuickMemo");
+            super(APP_NAME);
             this.app = app;
             setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
             setSize(380, 560);
@@ -3497,7 +3527,7 @@ public class QuickMemo {
                         row("밝기 · 글자 크기", "설정 → 화면 모드에서 밝게·어둡게·시스템, 글자 크기를 바꿔요", null)));
                 page.add(section("글쓰기",
                         row("서식", "굵게 Ctrl+B, 기울임 Ctrl+I, 밑줄 Ctrl+U, 취소선 Ctrl+T", null),
-                        row("목록 · 할 일", "글머리 기호와 체크 상자. Tab 으로 들여쓰기, Shift+Tab 으로 내어쓰기", null),
+                        row("목록 · 할 일", "글머리 기호 Ctrl+Shift+L, 할 일 체크 Ctrl+Shift+C. Tab 으로 들여쓰기, Shift+Tab 으로 내어쓰기", null),
                         row("그림", "복사한 그림을 Ctrl+V 로 붙여 넣거나 그림 버튼으로 넣어요", null),
                         row("링크", "http 주소에는 밑줄이 생겨요. Ctrl+클릭하면 브라우저로 열려요", null),
                         row("서식 버튼 순서", "서식 버튼을 끌어서 원하는 순서로 바꿔요", null)));
@@ -3593,11 +3623,11 @@ public class QuickMemo {
                 // 실행
                 boolean exe = Updater.installDir() != null;
                 ToggleSwitch auto = new ToggleSwitch(app.autoStart(), on -> {
-                    if (!app.setAutoStart(on)) Ask.notice(this, Ask.Kind.WARN, "자동 실행을 바꾸지 못했어요", exe ? null : "설치된 QuickMemo(exe)에서만 쓸 수 있어요.");
+                    if (!app.setAutoStart(on)) Ask.notice(this, Ask.Kind.WARN, "자동 실행을 바꾸지 못했어요", exe ? null : "설치된 메모플러스(exe)에서만 쓸 수 있어요.");
                     rebuild();
                 });
                 page.add(section("실행",
-                        row("Windows 시작 시 실행", exe ? "로그인하면 QuickMemo를 켜요" : "설치된 QuickMemo(exe)에서만 쓸 수 있어요", auto),
+                        row("Windows 시작 시 실행", exe ? "로그인하면 메모플러스를 켜요" : "설치된 메모플러스(exe)에서만 쓸 수 있어요", auto),
                         row("알림 영역에 남기", "창을 모두 닫아도 작업 표시줄 옆 아이콘으로 계속 실행", new ToggleSwitch(app.trayEnabled(), on -> app.setTray(on))),
                         row("새 메모 단축키", "어디서든 Ctrl+Alt+M" + (app.hotkeyEnabled() && !app.hotkeyOn ? " (다른 프로그램이 쓰고 있어요)" : ""),
                                 new ToggleSwitch(app.hotkeyEnabled(), on -> { app.setHotkey(on); rebuild(); }))));
@@ -3631,7 +3661,7 @@ public class QuickMemo {
                 imp.setEnabled(StickyImport.available());
                 imp.addActionListener(e -> app.importStickyNotes(this, true));
                 page.add(section("가져오기", row("Windows 스티커 메모", StickyImport.available()
-                        ? "이 PC의 스티커 메모를 QuickMemo로 복사" : "이 PC에서 스티커 메모를 찾지 못했습니다", imp)));
+                        ? "이 PC의 스티커 메모를 메모플러스로 복사" : "이 PC에서 스티커 메모를 찾지 못했습니다", imp)));
 
                 // 정보
                 JButton open = pill(new JButton("폴더 열기"));
@@ -3763,7 +3793,7 @@ public class QuickMemo {
             void exportBackup() {
                 JFileChooser fc = new JFileChooser();
                 fc.setDialogTitle("메모 내보내기");
-                fc.setSelectedFile(new java.io.File("QuickMemo-" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE) + ".zip"));
+                fc.setSelectedFile(new java.io.File("MemoPlus-" + LocalDate.now().format(DateTimeFormatter.BASIC_ISO_DATE) + ".zip"));
                 fc.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("zip 파일", "zip"));
                 if (fc.showSaveDialog(this) != JFileChooser.APPROVE_OPTION) return;
                 Path out = fc.getSelectedFile().toPath();

@@ -27,8 +27,8 @@ import java.util.regex.Pattern;
 
 /**
  * exe(jpackage app-image)로 실행될 때만 동작. 시작 시 GitHub 최신 릴리스를 확인하고,
- * 더 새 버전이면 QuickMemo-x.y.z-windows-x64.zip 을 받아 설치 폴더 내용을 교체한 뒤 다시 실행한다.
- * 메모 데이터는 %APPDATA%\QuickMemo 에 있으므로 교체 대상이 아니다.
+ * 더 새 버전이면 MemoPlus-x.y.z-windows-x64.zip 을 받아 설치 폴더 내용을 교체한 뒤 다시 실행한다.
+ * 메모 데이터는 %APPDATA%\MemoPlus 에 있으므로 교체 대상이 아니다.
  * (1.0.0 의 업데이터는 폴더 교체 버그가 있어 -win64.zip 만 찾는다. 새 이름으로 올려 예전 빌드가 반복 시도하지 않게 함)
  */
 final class Updater {
@@ -39,7 +39,7 @@ final class Updater {
     static final long RETRY_AFTER_MS = 60 * 60 * 1000L;
 
     /** 마지막 업데이트 시도 기록: 목표 버전과 시각 */
-    static Path attemptFile() { return QuickMemo.Store.dataDir().resolve("update-attempt.properties"); }
+    static Path attemptFile() { return MemoPlus.Store.dataDir().resolve("update-attempt.properties"); }
 
     static Properties readAttempt() {
         Properties p = new Properties();
@@ -67,8 +67,8 @@ final class Updater {
         if (p == null) return true;
         String target = p.getProperty("target", "0");
         long at = Long.parseLong(p.getProperty("time", "0"));
-        if (compare(QuickMemo.VERSION, target) >= 0) {
-            log("updated to " + QuickMemo.VERSION);
+        if (compare(MemoPlus.VERSION, target) >= 0) {
+            log("updated to " + MemoPlus.VERSION);
             try { Files.deleteIfExists(attemptFile()); } catch (IOException ignored) { }
             return true;
         }
@@ -80,7 +80,7 @@ final class Updater {
             try {
                 SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.WARN,
                         target + " 업데이트를 적용하지 못했어요",
-                        "지금 버전(" + QuickMemo.VERSION + ")으로 실행해요.\nQuickMemo 폴더를 연 탐색기 창이 있으면 닫아 주세요.\n1시간 뒤 실행할 때 다시 시도해요."));
+                        "지금 버전(" + MemoPlus.VERSION + ")으로 실행해요.\n메모플러스 폴더를 연 탐색기 창이 있으면 닫아 주세요.\n1시간 뒤 실행할 때 다시 시도해요."));
             } catch (Exception ignored) { }
         }
         return false;
@@ -89,30 +89,44 @@ final class Updater {
     /** sha256 은 GitHub 이 자산마다 알려 주는 digest (없으면 null: 예전 릴리스) */
     record Release(String version, String zipUrl, String sha256) {}
 
-    /** 이 저장소의 릴리스 다운로드 주소만 받는다 (API 응답이 조작돼도 다른 곳의 파일을 설치하지 않게) */
+    /** 이 저장소(이름을 바꾸기 전 저장소 포함)의 릴리스 다운로드 주소만 받는다 (API 응답이 조작돼도 다른 곳의 파일을 설치하지 않게) */
     static boolean trustedDownload(String url) {
-        return url.startsWith("https://github.com/" + QuickMemo.UPDATE_REPO + "/releases/download/") && !url.contains("..");
+        if (url.contains("..")) return false;
+        for (String repo : new String[]{MemoPlus.UPDATE_REPO, MemoPlus.OLD_REPO})
+            if (url.startsWith("https://github.com/" + repo + "/releases/download/")) return true;
+        return false;
     }
 
     static final long MAX_DOWNLOAD = 300L << 20, MAX_UNZIPPED = 800L << 20;
     static final int MAX_ENTRIES = 20000;
 
-    /** QuickMemo.exe 로 실행 중이면 그 설치 폴더, java/javaw 로 jar 를 실행 중이면 null */
+    /** 실행 파일 이름: 지금은 MemoPlus.exe, 1.0.x 의 업데이터가 찾는 QuickMemo.exe 도 같은 앱을 띄운다 */
+    static final String[] EXE_NAMES = {"MemoPlus.exe", "QuickMemo.exe"};
+
+    /** exe 로 실행 중이면 그 설치 폴더, java/javaw 로 jar 를 실행 중이면 null */
     static Path installDir() {
         String exe = System.getProperty("jpackage.app-path");
         if (exe == null) exe = ProcessHandle.current().info().command().orElse(null);
-        if (exe == null || !Paths.get(exe).getFileName().toString().equalsIgnoreCase("QuickMemo.exe")) return null;
-        return Paths.get(exe).toAbsolutePath().getParent();
+        if (exe == null) return null;
+        String name = Paths.get(exe).getFileName().toString();
+        for (String n : EXE_NAMES) if (name.equalsIgnoreCase(n)) return Paths.get(exe).toAbsolutePath().getParent();
+        return null;
+    }
+
+    /** 폴더 안의 실행 파일 (새 이름 우선) */
+    static Path exeIn(Path dir) {
+        for (String n : EXE_NAMES) if (Files.isRegularFile(dir.resolve(n))) return dir.resolve(n);
+        return dir.resolve(EXE_NAMES[0]);
     }
 
     static boolean updateIfAvailable() {
         Path dir = installDir();
-        if (dir == null || QuickMemo.UPDATE_REPO.isBlank()) return false;
+        if (dir == null || MemoPlus.UPDATE_REPO.isBlank()) return false;
         try {
             if (!mayAttempt()) return false;
             Release r = latest();
-            log("installed " + QuickMemo.VERSION + " at " + dir + ", latest " + (r == null ? "none" : r.version()));
-            if (r == null || compare(r.version(), QuickMemo.VERSION) <= 0) return false;
+            log("installed " + MemoPlus.VERSION + " at " + dir + ", latest " + (r == null ? "none" : r.version()));
+            if (r == null || compare(r.version(), MemoPlus.VERSION) <= 0) return false;
             if (anotherInstanceRunning()) { log("another instance running, skip"); return false; }
             return apply(r, dir);
         } catch (Exception e) {
@@ -121,10 +135,10 @@ final class Updater {
         }
     }
 
-    /** %APPDATA%/QuickMemo/update.log 에 기록 (64KB 넘으면 새로 시작) */
+    /** %APPDATA%/MemoPlus/update.log 에 기록 (64KB 넘으면 새로 시작) */
     static void log(String msg) {
         try {
-            Path f = QuickMemo.Store.dataDir().resolve("update.log");
+            Path f = MemoPlus.Store.dataDir().resolve("update.log");
             Files.createDirectories(f.getParent());
             if (Files.exists(f) && Files.size(f) > 64 * 1024) Files.delete(f);
             Files.writeString(f, java.time.LocalDateTime.now() + " " + msg + System.lineSeparator(),
@@ -141,12 +155,12 @@ final class Updater {
 
     static java.net.http.HttpRequest.Builder request(String url) {
         return java.net.http.HttpRequest.newBuilder(java.net.URI.create(url))
-                .header("User-Agent", "QuickMemo/" + QuickMemo.VERSION)
+                .header("User-Agent", "MemoPlus/" + MemoPlus.VERSION)
                 .header("Accept", "application/vnd.github+json");
     }
 
     static Release latest() throws Exception {
-        var res = client().send(request(API + "/repos/" + QuickMemo.UPDATE_REPO + "/releases/latest")
+        var res = client().send(request(API + "/repos/" + MemoPlus.UPDATE_REPO + "/releases/latest")
                 .timeout(java.time.Duration.ofSeconds(5)).build(), java.net.http.HttpResponse.BodyHandlers.ofString());
         if (res.statusCode() != 200) return null;
         String body = res.body();
@@ -173,10 +187,10 @@ final class Updater {
         try { return Integer.parseInt(s.replaceAll("\\D.*", "")); } catch (NumberFormatException e) { return 0; }
     }
 
-    /** 이미 실행 중인 QuickMemo 가 있으면 폴더를 바꿀 수 없으므로 업데이트를 미룬다 */
+    /** 이미 실행 중인 메모플러스 가 있으면 폴더를 바꿀 수 없으므로 업데이트를 미룬다 */
     static boolean anotherInstanceRunning() {
         try {
-            Path dir = QuickMemo.Store.dataDir();
+            Path dir = MemoPlus.Store.dataDir();
             Files.createDirectories(dir);
             try (FileChannel ch = FileChannel.open(dir.resolve(".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
                 FileLock l = ch.tryLock();
@@ -191,11 +205,11 @@ final class Updater {
 
     static boolean apply(Release r, Path dir) {
         Path staging = dir.resolveSibling(dir.getFileName() + ".update");
-        Progress pw = Progress.show("QuickMemo " + r.version() + " 업데이트 중...");
+        Progress pw = Progress.show("메모플러스 " + r.version() + " 업데이트 중...");
         try {
             if (!Files.isWritable(dir.getParent())) throw new IOException("설치 폴더 위치에 쓸 수 없습니다: " + dir.getParent());
             deleteTree(staging);
-            Path zip = Files.createTempFile("QuickMemo-", ".zip");
+            Path zip = Files.createTempFile("MemoPlus-", ".zip");
             String sha = download(r.zipUrl(), zip, pw);
             if (r.sha256() != null && !r.sha256().equals(sha)) {
                 Files.deleteIfExists(zip);
@@ -204,27 +218,27 @@ final class Updater {
             log("download sha256 " + sha + (r.sha256() != null ? " (verified)" : " (no digest published)"));
             unzip(zip, staging);
             Files.deleteIfExists(zip);
-            Path newApp = Files.exists(staging.resolve("QuickMemo.exe")) ? staging : null;
+            Path newApp = Files.exists(staging.resolve("MemoPlus.exe")) ? staging : null;
             if (newApp == null) {
                 try (var ds = Files.newDirectoryStream(staging)) {
-                    for (Path p : ds) if (Files.exists(p.resolve("QuickMemo.exe"))) newApp = p;
+                    for (Path p : ds) if (Files.exists(p.resolve("MemoPlus.exe"))) newApp = p;
                 }
             }
-            if (newApp == null) throw new IOException("받은 파일에 QuickMemo.exe 가 없습니다.");
-            Path script = Files.createTempFile("QuickMemo-update-", ".ps1");
+            if (newApp == null) throw new IOException("받은 파일에 MemoPlus.exe 가 없습니다.");
+            Path script = Files.createTempFile("MemoPlus-update-", ".ps1");
             Files.writeString(script, SCRIPT, StandardCharsets.UTF_8);
             Properties attempt = new Properties();
             attempt.setProperty("target", r.version());
-            attempt.setProperty("from", QuickMemo.VERSION);
+            attempt.setProperty("from", MemoPlus.VERSION);
             attempt.setProperty("time", String.valueOf(System.currentTimeMillis()));
             writeAttempt(attempt);
-            log("applying " + QuickMemo.VERSION + " -> " + r.version());
+            log("applying " + MemoPlus.VERSION + " -> " + r.version());
             // 스크립트의 작업 폴더가 설치 폴더 안이면 그 폴더를 붙잡아 교체가 실패하므로 임시 폴더에서 실행
             new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
                     "-File", script.toString(),
                     "-OldPid", String.valueOf(ProcessHandle.current().pid()),
                     "-Src", newApp.toString(), "-Dst", dir.toString(), "-Staging", staging.toString(),
-                    "-Log", QuickMemo.Store.dataDir().resolve("update.log").toString())
+                    "-Log", MemoPlus.Store.dataDir().resolve("update.log").toString())
                     .directory(script.getParent().toFile())
                     .start();
             System.exit(0);
@@ -235,7 +249,7 @@ final class Updater {
             try { deleteTree(staging); } catch (IOException ignored) { }
             try {
                 SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.WARN, "업데이트하지 못했어요",
-                        "지금 버전(" + QuickMemo.VERSION + ")으로 실행해요.\n" + e.getMessage()));
+                        "지금 버전(" + MemoPlus.VERSION + ")으로 실행해요.\n" + e.getMessage()));
             } catch (Exception ignored) { }
             return false;
         }
@@ -337,7 +351,9 @@ final class Updater {
             "  foreach ($n in $moved) { Move-Item -LiteralPath (Join-Path $bak $n) -Destination $Dst -ErrorAction SilentlyContinue }",
             "  Log 'kept previous version'",
             "}",
-            "Start-Process -FilePath (Join-Path $Dst 'QuickMemo.exe') -WorkingDirectory $Dst",
+            "$exe = Join-Path $Dst 'MemoPlus.exe'",
+            "if (-not (Test-Path -LiteralPath $exe)) { $exe = Join-Path $Dst 'QuickMemo.exe' }",   // 되돌린 경우 예전 이름
+            "Start-Process -FilePath $exe -WorkingDirectory $Dst",
             "if ($ok -or -not @(Get-ChildItem -LiteralPath $bak -Force)) { Remove-Item -LiteralPath $bak -Recurse -Force -ErrorAction SilentlyContinue }",
             "Remove-Item -LiteralPath $Staging -Recurse -Force -ErrorAction SilentlyContinue",
             "Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue",
@@ -358,7 +374,7 @@ final class Updater {
                             BorderFactory.createLineBorder(new Color(0xD9B700)), new EmptyBorder(16, 20, 16, 20)));
                     root.setBackground(new Color(0xFFF7D1));
                     JLabel l = new JLabel(text);
-                    l.setFont(QuickMemo.BASE_FONT);
+                    l.setFont(MemoPlus.BASE_FONT);
                     p.bar = new JProgressBar(0, 100);
                     p.bar.setIndeterminate(true);
                     root.add(l, BorderLayout.NORTH);

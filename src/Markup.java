@@ -144,7 +144,7 @@ final class Markup {
                 boolean known = true;
                 if (cur.length() > 0) { runs.add(new Run(cur.toString(), b, it, u, s, null)); cur.setLength(0); }
                 if (tok.startsWith("id=")) { /* 문단 ID: 무시 */ }
-                else if (tok.startsWith("img=") && QuickMemo.Store.validMediaId(tok.substring(4))) runs.add(new Run("", false, false, false, false, tok.substring(4)));
+                else if (tok.startsWith("img=") && MemoPlus.Store.validMediaId(tok.substring(4))) runs.add(new Run("", false, false, false, false, tok.substring(4)));
                 else switch (tok) {
                     case "b" -> b = true;
                     case "b0" -> b = false;
