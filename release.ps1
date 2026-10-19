@@ -23,6 +23,9 @@ $src = $src -replace 'VERSION = "[0-9.]+"', "VERSION = `"$Version`""
 $flatlaf = "$PWD\lib\flatlaf-3.5.4.jar"     # modern look and feel, bundled into the jar
 javac -encoding UTF-8 -cp $flatlaf -d build\classes build\src\QuickMemo.java
 if ($LASTEXITCODE) { throw 'javac failed' }
+# global hotkey: JDK 21 foreign function API (preview), compiled on its own; the app runs with --enable-preview
+javac --release 21 --enable-preview -encoding UTF-8 -d build\classes src\QuickMemoHotkey.java 2>$null
+if ($LASTEXITCODE) { throw 'javac hotkey failed' }
 Push-Location build\classes; jar xf $flatlaf; Pop-Location
 if ($LASTEXITCODE) { throw 'flatlaf extract failed' }
 Remove-Item build\classes\META-INF -Recurse -Force -ErrorAction SilentlyContinue
@@ -35,7 +38,7 @@ jpackage --type app-image --name QuickMemo --app-version $Version `
     --input build\jar --main-jar QuickMemo.jar --main-class QuickMemo --dest build\image `
     --add-modules 'java.desktop,java.logging,java.net.http,jdk.crypto.ec,jdk.localedata,jdk.charsets' `
     --jlink-options '--strip-debug --no-man-pages --no-header-files --include-locales=en,ko' `
-    --java-options '-Dsun.java2d.uiScale.enabled=true'
+    --java-options '-Dsun.java2d.uiScale.enabled=true --enable-preview --enable-native-access=ALL-UNNAMED'
 if ($LASTEXITCODE) { throw 'jpackage failed' }
 
 New-Item -ItemType Directory dist -Force | Out-Null

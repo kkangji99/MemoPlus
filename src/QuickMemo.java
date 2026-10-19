@@ -2728,6 +2728,8 @@ public class QuickMemo {
             list = new NotesListWindow(this);
             purgeExpiredTrash();
             Backup.daily(store);                                     // 하루 한 번 자동 백업 (켜 둔 채 날이 바뀌면 다음 날도)
+            if (trayEnabled()) setTray(true);
+            if (hotkeyEnabled()) setHotkey(true);
             new javax.swing.Timer(6 * 60 * 60 * 1000, e -> Backup.daily(store)).start();
 
             int opened = 0;
@@ -2790,6 +2792,109 @@ public class QuickMemo {
             }, "start-menu");
             t.setDaemon(true);
             t.start();
+        }
+
+        /** 바로가기(.lnk) 만들기. 경로는 명령줄 인자로만 넘기고 스크립트는 고정 문자열 */
+        static boolean makeShortcut(Path lnk, Path exe, Path workDir) {
+            try {
+                Files.createDirectories(lnk.getParent());
+                Path script = Files.createTempFile("QuickMemo-shortcut-", ".ps1");
+                Files.writeString(script, String.join("\r\n",
+                        "param([string]$Lnk, [string]$Exe, [string]$Dir)",
+                        "$ErrorActionPreference = 'Stop'",
+                        "$s = (New-Object -ComObject WScript.Shell).CreateShortcut($Lnk)",
+                        "$s.TargetPath = $Exe",
+                        "$s.WorkingDirectory = $Dir",
+                        "$s.IconLocation = \"$Exe,0\"",
+                        "$s.Description = 'QuickMemo'",
+                        "$s.Save()",
+                        ""), StandardCharsets.UTF_8);
+                Process p = new ProcessBuilder("powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                        "-File", script.toString(), "-Lnk", lnk.toString(), "-Exe", exe.toString(), "-Dir", workDir.toString())
+                        .redirectErrorStream(true).start();
+                p.getInputStream().readAllBytes();
+                boolean ok = p.waitFor(20, java.util.concurrent.TimeUnit.SECONDS) && p.exitValue() == 0;
+                Files.deleteIfExists(script);
+                return ok && Files.exists(lnk);
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        // ---------- 트레이 · Windows 시작 시 실행 · 전역 단축키
+        TrayIcon tray;
+        boolean hotkeyOn;
+
+        /** 시작 프로그램 폴더의 바로가기 (Windows 로그인하면 실행) */
+        static Path autoStartLink() {
+            String appData = System.getenv("APPDATA");
+            return appData == null ? null : Paths.get(appData, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "QuickMemo.lnk");
+        }
+
+        boolean autoStart() { Path l = autoStartLink(); return l != null && Files.exists(l); }
+
+        /** 켜기: exe 로 실행 중일 때만 (jar 개발 실행은 바로가기 대상이 없음). 결과를 돌려줌 */
+        boolean setAutoStart(boolean on) {
+            Path lnk = autoStartLink(), dir = Updater.installDir();
+            if (lnk == null) return false;
+            if (!on) { try { Files.deleteIfExists(lnk); } catch (IOException ignored) { } return !Files.exists(lnk); }
+            return dir != null && makeShortcut(lnk, dir.resolve("QuickMemo.exe"), dir);
+        }
+
+        boolean trayEnabled() { return !"false".equals(store.settings.getProperty("tray")); }
+
+        /** 알림 영역 아이콘: 두 번 누르면 메모 목록, 메뉴에서 새 메모·목록·종료 */
+        void setTray(boolean on) {
+            store.set("tray", String.valueOf(on));
+            if (!SystemTray.isSupported()) return;
+            if (!on) {
+                if (tray != null) SystemTray.getSystemTray().remove(tray);
+                tray = null;
+                checkExit();
+                return;
+            }
+            if (tray != null) return;
+            PopupMenu m = new PopupMenu();
+            Font f = new Font("Malgun Gothic", Font.PLAIN, 12);
+            MenuItem nw = new MenuItem("새 메모");
+            nw.addActionListener(e -> SwingUtilities.invokeLater(() -> newNote(null)));
+            MenuItem ls = new MenuItem("메모 목록");
+            ls.addActionListener(e -> SwingUtilities.invokeLater(this::showList));
+            MenuItem quit = new MenuItem("종료");
+            quit.addActionListener(e -> SwingUtilities.invokeLater(this::exit));
+            for (MenuItem i : List.of(nw, ls, quit)) i.setFont(f);
+            m.add(nw);
+            m.add(ls);
+            m.addSeparator();
+            m.add(quit);
+            TrayIcon t = new TrayIcon(appIcon(32, Theme.Yellow), "QuickMemo", m);
+            t.setImageAutoSize(true);
+            t.addActionListener(e -> SwingUtilities.invokeLater(this::showList));
+            try {
+                SystemTray.getSystemTray().add(t);
+                tray = t;
+            } catch (AWTException e) {
+                tray = null;
+            }
+        }
+
+        boolean hotkeyEnabled() { return !"false".equals(store.settings.getProperty("hotkey")); }
+
+        /** Ctrl+Alt+M 새 메모. QuickMemoHotkey(미리보기 기능 필요)를 못 쓰면 조용히 꺼짐 */
+        void setHotkey(boolean on) {
+            store.set("hotkey", String.valueOf(on));
+            try {
+                Class<?> hk = Class.forName("QuickMemoHotkey");
+                if (!on) {
+                    hk.getMethod("stop").invoke(null);
+                    hotkeyOn = false;
+                } else if (!hotkeyOn) {
+                    Runnable r = () -> { NoteWindow w = newNoteWindow(); if (w != null) { w.toFront(); w.requestFocus(); } };
+                    hotkeyOn = (boolean) hk.getMethod("start", int.class, int.class, Runnable.class).invoke(null, 0x2 | 0x1, (int) 'M', r);
+                }
+            } catch (Throwable e) {
+                hotkeyOn = false;
+            }
         }
 
         /** Windows 스티커 메모를 가져와 닫힌 메모로 추가. 이미 가져온 메모는 건너뜀. 가져온 개수 반환 */
@@ -2866,7 +2971,11 @@ public class QuickMemo {
             list.refresh();
         }
 
-        void newNote(Window near) {
+        void newNote(Window near) { newNoteWindow(near); }
+
+        NoteWindow newNoteWindow() { return newNoteWindow(null); }
+
+        NoteWindow newNoteWindow(Window near) {
             Note n = new Note();
             n.theme = store.defaultTheme();
             n.open = true;
@@ -2880,6 +2989,7 @@ public class QuickMemo {
             NoteWindow w = openNote(n);
             w.pane.requestFocusInWindow();
             list.refresh();
+            return w;
         }
 
         NoteWindow openNote(Note n) {
@@ -3037,7 +3147,7 @@ public class QuickMemo {
 
         void checkExit() {
             SwingUtilities.invokeLater(() -> {
-                if (windows.isEmpty() && !list.isVisible()) exit();
+                if (windows.isEmpty() && !list.isVisible() && tray == null) exit();   // 트레이가 있으면 계속 실행
             });
         }
 
@@ -4707,6 +4817,18 @@ public class QuickMemo {
                 // 동작
                 page.add(section("동작", row("삭제 전에 확인", "메모를 지울 때 한 번 더 묻기", new ToggleSwitch(app.store.confirmDelete(), on ->
                         app.store.set("confirmDelete", String.valueOf(on))))));
+
+                // 실행
+                boolean exe = Updater.installDir() != null;
+                ToggleSwitch auto = new ToggleSwitch(app.autoStart(), on -> {
+                    if (!app.setAutoStart(on)) Ask.notice(this, Ask.Kind.WARN, "자동 실행을 바꾸지 못했어요", exe ? null : "설치된 QuickMemo(exe)에서만 쓸 수 있어요.");
+                    rebuild();
+                });
+                page.add(section("실행",
+                        row("Windows 시작 시 실행", exe ? "로그인하면 QuickMemo를 켜요" : "설치된 QuickMemo(exe)에서만 쓸 수 있어요", auto),
+                        row("알림 영역에 남기", "창을 모두 닫아도 작업 표시줄 옆 아이콘으로 계속 실행", new ToggleSwitch(app.trayEnabled(), on -> app.setTray(on))),
+                        row("새 메모 단축키", "어디서든 Ctrl+Alt+M" + (app.hotkeyEnabled() && !app.hotkeyOn ? " (다른 프로그램이 쓰고 있어요)" : ""),
+                                new ToggleSwitch(app.hotkeyEnabled(), on -> { app.setHotkey(on); rebuild(); }))));
 
                 // 휴지통
                 JButton trash = pill(new JButton("열기"));
