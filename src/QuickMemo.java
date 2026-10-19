@@ -32,7 +32,7 @@ import java.util.regex.Pattern;
 public class QuickMemo {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.0.16";
+    static final String VERSION = "1.0.17";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/QuickMemo";
 
@@ -53,7 +53,11 @@ public class QuickMemo {
      * 화면 테마: FlatLaf (Windows 11 느낌의 현대적인 Swing 테마). 설정 창·확인 창·버튼·스크롤바·창 제목 표시줄에 적용.
      * FlatLaf 를 못 쓰면 Windows 기본 테마로.
      */
+    /** 지금 어둡게 모드인지 (setupLaf 가 기록. 알림창 색에 씀) */
+    static volatile boolean DARK;
+
     static void setupLaf(boolean dark) {
+        DARK = dark;
         UIManager.put("defaultFont", new javax.swing.plaf.FontUIResource("Malgun Gothic", Font.PLAIN, 13));
         UIManager.put("Button.arc", 10);
         UIManager.put("Component.arc", 10);
@@ -72,6 +76,14 @@ public class QuickMemo {
         } catch (Throwable e) {
             try { UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName()); } catch (Exception ignored) { }
         }
+    }
+
+    /** 창 제목줄을 창 배경과 같은 색으로, 아이콘·제목 글자는 숨긴다 (FlatLaf 창 꾸미기일 때) */
+    static void blendTitleBar(JRootPane rp, Color bg, Color fg) {
+        rp.putClientProperty("JRootPane.titleBarShowIcon", false);
+        rp.putClientProperty("JRootPane.titleBarShowTitle", false);
+        rp.putClientProperty("JRootPane.titleBarBackground", bg);
+        rp.putClientProperty("JRootPane.titleBarForeground", fg);
     }
 
     /** 실행 중에 밝게/어둡게를 바꾸면 모든 창의 테마를 다시 적용 */
@@ -134,11 +146,9 @@ public class QuickMemo {
                 p.setProperty("notified", "1");
                 writeAttempt(p);
                 try {
-                    SwingUtilities.invokeAndWait(() -> JOptionPane.showMessageDialog(null,
-                            "QuickMemo " + target + " 업데이트를 적용하지 못해 현재 버전(" + VERSION + ")으로 실행합니다.\n"
-                                    + "QuickMemo 폴더를 연 탐색기 창이 있으면 닫아 주세요. 1시간 뒤 실행할 때 다시 시도합니다.\n"
-                                    + "자세한 내용: " + Store.dataDir().resolve("update.log"),
-                            "QuickMemo 업데이트", JOptionPane.WARNING_MESSAGE));
+                    SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.WARN,
+                            target + " 업데이트를 적용하지 못했어요",
+                            "지금 버전(" + VERSION + ")으로 실행해요.\nQuickMemo 폴더를 연 탐색기 창이 있으면 닫아 주세요.\n1시간 뒤 실행할 때 다시 시도해요."));
                 } catch (Exception ignored) { }
             }
             return false;
@@ -292,9 +302,8 @@ public class QuickMemo {
                 pw.close();
                 try { deleteTree(staging); } catch (IOException ignored) { }
                 try {
-                    SwingUtilities.invokeAndWait(() -> JOptionPane.showMessageDialog(null,
-                            "업데이트하지 못해 현재 버전(" + VERSION + ")으로 실행합니다.\n" + e.getMessage(),
-                            "QuickMemo", JOptionPane.WARNING_MESSAGE));
+                    SwingUtilities.invokeAndWait(() -> Ask.notice(null, Ask.Kind.WARN, "업데이트하지 못했어요",
+                            "지금 버전(" + VERSION + ")으로 실행해요.\n" + e.getMessage()));
                 } catch (Exception ignored) { }
                 return false;
             }
@@ -1755,6 +1764,212 @@ public class QuickMemo {
     }
 
     /**
+     * 카드형 확인·알림창 (JOptionPane 대신). 둥근 카드 + 동그란 아이콘 + 제목 + 설명 + 알약 버튼.
+     * 메모 목록·설정처럼 네모난 창 위에서는 그 창을 살짝 어둡게 덮고 가운데에, 그 밖에는 화면 가운데에 뜬다.
+     */
+    static final class Ask {
+        enum Kind { INFO, QUESTION, WARN, DANGER }
+
+        static final int SH = 16;                                    // 그림자 여백
+
+        static void notice(Component parent, Kind kind, String title, String desc) {
+            show(parent, kind, title, desc, "확인", null, null);
+        }
+
+        static boolean confirm(Component parent, Kind kind, String title, String desc, String ok, String cancel) {
+            return show(parent, kind, title, desc, ok, cancel, null);
+        }
+
+        /** extra: 카드 안에 넣을 체크 상자 등 (예: 다시 묻지 않음) */
+        static boolean show(Component parent, Kind kind, String title, String desc, String ok, String cancel, JComponent extra) {
+            Window owner = parent == null ? null : parent instanceof Window w ? w : SwingUtilities.getWindowAncestor(parent);
+            if (owner != null && !owner.isShowing()) owner = null;
+            // 테두리 있는 네모 창(목록·설정)만 어둡게 덮는다. 모양 메모 창은 투명한 바깥까지 어두워지므로 덮지 않음
+            boolean dim = owner != null && NoteWindow.TRANSLUCENT
+                    && ((owner instanceof Frame f && !f.isUndecorated()) || (owner instanceof Dialog d && !d.isUndecorated()));
+            JDialog dlg = new JDialog(owner, Dialog.ModalityType.APPLICATION_MODAL);
+            dlg.setUndecorated(true);
+            if (NoteWindow.TRANSLUCENT) {
+                dlg.setBackground(new Color(0, 0, 0, 0));
+                dlg.getRootPane().setOpaque(false);
+                dlg.getRootPane().setBackground(new Color(0, 0, 0, 0));
+                dlg.getLayeredPane().setOpaque(false);
+            }
+            boolean[] result = {false};
+            Color cardBg = DARK ? new Color(0x2B2B2B) : STYLE == Style.Simple ? Color.WHITE : new Color(0xFFFDF9);
+            Color fg = DARK ? new Color(0xF2F2F2) : STYLE == Style.Simple ? new Color(0x1F1F1F) : new Color(0x4A3A2C);
+            Color sub = DARK ? new Color(0xB5B5B5) : STYLE == Style.Simple ? new Color(0x666666) : new Color(0x8A7766);
+            Color danger = new Color(0xD64545);
+            Color accent = STYLE == Style.Simple ? (DARK ? new Color(0x4CC2FF) : new Color(0x0067C0)) : styleAccent();
+
+            JPanel card = new JPanel() {
+                java.awt.image.BufferedImage shadow;
+
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    int w = getWidth(), h = getHeight();
+                    Shape r = new java.awt.geom.RoundRectangle2D.Double(SH, SH, w - 2 * SH, h - 2 * SH, 18, 18);
+                    if (NoteWindow.TRANSLUCENT) {
+                        if (shadow == null || shadow.getWidth() != w || shadow.getHeight() != h) {
+                            java.awt.image.BufferedImage img = new java.awt.image.BufferedImage(w, h, java.awt.image.BufferedImage.TYPE_INT_ARGB);
+                            Graphics2D sg = img.createGraphics();
+                            sg.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                            sg.setColor(new Color(0, 0, 0, DARK ? 140 : 70));
+                            sg.fill(java.awt.geom.AffineTransform.getTranslateInstance(0, 4).createTransformedShape(r));
+                            sg.dispose();
+                            float[] k = new float[13 * 13];
+                            java.util.Arrays.fill(k, 1f / k.length);
+                            shadow = new java.awt.image.ConvolveOp(new java.awt.image.Kernel(13, 13, k), java.awt.image.ConvolveOp.EDGE_NO_OP, null).filter(img, null);
+                        }
+                        g2.drawImage(shadow, 0, 0, null);
+                    }
+                    g2.setColor(cardBg);
+                    g2.fill(r);
+                    g2.setColor(DARK ? new Color(255, 255, 255, 25) : new Color(0, 0, 0, 22));
+                    g2.draw(r);
+                    g2.dispose();
+                }
+            };
+            card.setOpaque(false);
+            card.setLayout(new BoxLayout(card, BoxLayout.Y_AXIS));
+            card.setBorder(new EmptyBorder(SH + 20, SH + 22, SH + 18, SH + 22));
+
+            Color iconBg = switch (kind) {
+                case DANGER -> DARK ? new Color(0x5A2626) : new Color(0xFDE3E3);
+                case WARN -> DARK ? new Color(0x5A4A1E) : new Color(0xFDF0D2);
+                default -> new Color(accent.getRed(), accent.getGreen(), accent.getBlue(), DARK ? 70 : 38);
+            };
+            Color iconFg = switch (kind) {
+                case DANGER -> DARK ? new Color(0xFF8A8A) : new Color(0xC43B3B);
+                case WARN -> DARK ? new Color(0xF5C451) : new Color(0xB07A0A);
+                default -> accent;
+            };
+            JComponent icon = new JComponent() {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    int d = 44, x = (getWidth() - d) / 2;
+                    g2.setColor(iconBg);
+                    g2.fillOval(x, 0, d, d);
+                    g2.setColor(iconFg);
+                    g2.setStroke(new BasicStroke(2.4f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    int cx = x + d / 2, cy = d / 2;
+                    switch (kind) {
+                        case DANGER -> {
+                            JLabel tmp = new JLabel();
+                            tmp.setForeground(iconFg);
+                            new Glyph("trash", 22).paintIcon(tmp, g2, cx - 11, cy - 11);
+                        }
+                        case WARN -> {
+                            g2.drawLine(cx, cy - 9, cx, cy + 2);
+                            g2.fillOval(cx - 2, cy + 6, 4, 4);
+                        }
+                        case QUESTION -> {
+                            g2.draw(new java.awt.geom.Arc2D.Double(cx - 6, cy - 11, 12, 11, 160, -250, java.awt.geom.Arc2D.OPEN));
+                            g2.drawLine(cx, cy, cx, cy + 2);
+                            g2.fillOval(cx - 2, cy + 6, 4, 4);
+                        }
+                        default -> g2.drawPolyline(new int[]{cx - 8, cx - 2, cx + 9}, new int[]{cy, cy + 6, cy - 6}, 3);
+                    }
+                    g2.dispose();
+                }
+            };
+            icon.setPreferredSize(new Dimension(44, 44));
+            icon.setMinimumSize(new Dimension(44, 44));                // 세로로 눌려 사라지지 않게
+            icon.setMaximumSize(new Dimension(Integer.MAX_VALUE, 44));
+            icon.setAlignmentX(Component.CENTER_ALIGNMENT);
+            card.add(icon);
+            card.add(Box.createVerticalStrut(12));
+
+            JLabel t = new JLabel("<html><div style='text-align:center;width:240px'>" + esc(title) + "</div></html>", SwingConstants.CENTER);
+            t.setFont(BASE_FONT.deriveFont(Font.BOLD, 15f));
+            t.setForeground(fg);
+            t.setAlignmentX(Component.CENTER_ALIGNMENT);
+            card.add(t);
+            if (desc != null && !desc.isBlank()) {
+                card.add(Box.createVerticalStrut(6));
+                JLabel dl = new JLabel("<html><div style='text-align:center;width:240px'>" + esc(desc).replace("\n", "<br>") + "</div></html>", SwingConstants.CENTER);
+                dl.setFont(BASE_FONT.deriveFont(12.5f));
+                dl.setForeground(sub);
+                dl.setAlignmentX(Component.CENTER_ALIGNMENT);
+                card.add(dl);
+            }
+            if (extra != null) {
+                card.add(Box.createVerticalStrut(10));
+                extra.setOpaque(false);
+                extra.setForeground(sub);
+                extra.setAlignmentX(Component.CENTER_ALIGNMENT);
+                card.add(extra);
+            }
+            card.add(Box.createVerticalStrut(18));
+
+            JPanel btns = new JPanel(new GridLayout(1, cancel == null ? 1 : 2, 8, 0));
+            btns.setOpaque(false);
+            btns.setAlignmentX(Component.CENTER_ALIGNMENT);
+            JButton okB = new JButton(ok);
+            okB.putClientProperty("JButton.buttonType", "roundRect");
+            Color okBg = kind == Kind.DANGER ? danger : accent;
+            okB.setBackground(okBg);
+            okB.setForeground(Color.WHITE);
+            // 포커스 테두리(파란 링) 없이 깔끔하게. Enter=확인, Esc=취소 는 그대로
+            okB.putClientProperty("FlatLaf.style", "borderColor: " + hex(okBg) + "; focusedBorderColor: " + hex(okBg)
+                    + "; hoverBackground: " + hex(okBg.darker()) + "; pressedBackground: " + hex(okBg.darker().darker())
+                    + "; focusWidth: 0; innerFocusWidth: 0");
+            okB.addActionListener(e -> { result[0] = true; dlg.dispose(); });
+            if (cancel != null) {
+                JButton cB = new JButton(cancel);
+                cB.putClientProperty("JButton.buttonType", "roundRect");
+                cB.setFocusable(false);
+                cB.putClientProperty("FlatLaf.style", "focusWidth: 0; innerFocusWidth: 0");
+                cB.addActionListener(e -> dlg.dispose());
+                btns.add(cB);
+            }
+            btns.add(okB);
+            btns.setPreferredSize(new Dimension(280, 36));
+            btns.setMaximumSize(new Dimension(280, 36));
+            card.add(btns);
+            // 기본 버튼으로 지정하면 FlatLaf 가 파란 테두리를 그리므로 Enter 는 직접 연결
+            okB.putClientProperty("FlatLaf.style", okB.getClientProperty("FlatLaf.style") + "; focusColor: " + hex(okBg));
+            NoteWindow.bind(dlg.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), dlg.getRootPane().getActionMap(),
+                    KeyStroke.getKeyStroke(KeyEvent.VK_ENTER, 0), "ok", okB::doClick);
+            NoteWindow.bind(dlg.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW), dlg.getRootPane().getActionMap(),
+                    KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancel", dlg::dispose);
+
+            Dimension cs = card.getPreferredSize();
+            if (dim) {                                               // 창 전체를 살짝 어둡게 덮고 가운데에 카드
+                JPanel shade = new JPanel(new GridBagLayout()) {
+                    @Override
+                    protected void paintComponent(Graphics g) {
+                        g.setColor(new Color(40, 28, 20, DARK ? 120 : 70));
+                        g.fillRect(0, 0, getWidth(), getHeight());
+                    }
+                };
+                shade.setOpaque(false);
+                shade.add(card);
+                dlg.setContentPane(shade);
+                Rectangle ob = owner.getBounds();
+                if (owner instanceof RootPaneContainer rpc) {           // 창 안쪽(내용 영역)만 덮기
+                    Container cp = rpc.getContentPane();
+                    Point p = cp.getLocationOnScreen();
+                    ob = new Rectangle(p.x, p.y, cp.getWidth(), cp.getHeight());
+                }
+                dlg.setBounds(ob);
+            } else {
+                dlg.setContentPane(card);
+                dlg.setSize(cs);
+                if (owner != null) dlg.setLocationRelativeTo(owner); else dlg.setLocationRelativeTo(null);
+            }
+            dlg.setVisible(true);                                    // 닫힐 때까지 기다림 (모달)
+            return result[0];
+        }
+
+        static String hex(Color c) { return String.format("#%02X%02X%02X", c.getRed(), c.getGreen(), c.getBlue()); }
+    }
+
+    /**
      * 계절 스타일 장식. band: 위쪽 색 띠 아래 끝 H px 안에 그리는 줄 장식 (글을 가리지 않음),
      * pattern: 본문에 은은하게 흩뿌린 무늬 (메모마다 같은 자리).
      */
@@ -2135,11 +2350,11 @@ public class QuickMemo {
                 FileChannel ch = FileChannel.open(store.dir.resolve(".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                 lock = ch.tryLock();
                 if (lock == null) {
-                    JOptionPane.showMessageDialog(null, "QuickMemo가 이미 실행 중입니다.", "QuickMemo", JOptionPane.INFORMATION_MESSAGE);
+                    Ask.notice(null, Ask.Kind.INFO, "QuickMemo가 이미 실행 중이에요", "열려 있는 메모나 메모 목록을 사용해 주세요.");
                     System.exit(0);
                 }
             } catch (IOException e) {
-                JOptionPane.showMessageDialog(null, "저장소를 열 수 없습니다: " + e.getMessage());
+                Ask.notice(null, Ask.Kind.WARN, "메모 저장소를 열 수 없어요", e.getMessage());
                 System.exit(1);
             }
             applyStyle(chosenStyle());                                  // 기본은 심플
@@ -2159,9 +2374,9 @@ public class QuickMemo {
             // 처음 실행이고 Windows 스티커 메모가 있으면 한 번 가져오기를 제안
             if (notes.isEmpty() && StickyImport.available() && !"true".equals(store.settings.getProperty("importOffered"))) {
                 store.set("importOffered", "true");
-                int r = JOptionPane.showConfirmDialog(null, "Windows 스티커 메모가 있습니다. QuickMemo로 가져올까요?\n(나중에 메모 목록 > 설정에서도 가져올 수 있습니다)",
-                        "QuickMemo", JOptionPane.YES_NO_OPTION, JOptionPane.QUESTION_MESSAGE);
-                if (r == JOptionPane.YES_OPTION && importStickyNotes(null, false) > 0) { showList(); return; }
+                boolean yes = Ask.confirm(null, Ask.Kind.QUESTION, "Windows 스티커 메모를 가져올까요?",
+                        "나중에 메모 목록 > 설정에서도 가져올 수 있어요.", "가져오기", "나중에");
+                if (yes && importStickyNotes(null, false) > 0) { showList(); return; }
             }
             if (opened == 0) {
                 if (activeNotes().isEmpty()) newNote(null);
@@ -2219,7 +2434,7 @@ public class QuickMemo {
             try {
                 rows = StickyImport.readNotes();
             } catch (Exception e) {
-                JOptionPane.showMessageDialog(parent, "스티커 메모를 읽지 못했습니다.\n" + e.getMessage(), "가져오기", JOptionPane.WARNING_MESSAGE);
+                Ask.notice(parent, Ask.Kind.WARN, "스티커 메모를 읽지 못했어요", e.getMessage());
                 return 0;
             }
             Set<String> done = new HashSet<>();
@@ -2228,13 +2443,12 @@ public class QuickMemo {
             for (Map<String, Object> r : rows) if (!done.contains((String) r.get("Id"))) todo.add(r);
             int skipped = rows.size() - todo.size();
             if (todo.isEmpty()) {
-                JOptionPane.showMessageDialog(parent, rows.isEmpty() ? "가져올 스티커 메모가 없습니다."
-                        : "새로 가져올 메모가 없습니다. (이미 가져온 메모 " + skipped + "개)", "가져오기", JOptionPane.INFORMATION_MESSAGE);
+                Ask.notice(parent, Ask.Kind.INFO, rows.isEmpty() ? "가져올 스티커 메모가 없어요" : "새로 가져올 메모가 없어요",
+                        rows.isEmpty() ? null : "이미 가져온 메모 " + skipped + "개");
                 return 0;
             }
-            if (confirm && JOptionPane.showConfirmDialog(parent, "Windows 스티커 메모 " + todo.size() + "개를 가져올까요?"
-                    + (skipped > 0 ? "\n(이미 가져온 " + skipped + "개는 건너뜁니다)" : ""), "가져오기",
-                    JOptionPane.OK_CANCEL_OPTION) != JOptionPane.OK_OPTION) return 0;
+            if (confirm && !Ask.confirm(parent, Ask.Kind.QUESTION, "스티커 메모 " + todo.size() + "개를 가져올까요?",
+                    skipped > 0 ? "이미 가져온 " + skipped + "개는 건너뛰어요." : null, "가져오기", "취소")) return 0;
             for (Map<String, Object> r : todo) {
                 Note n = new Note();
                 n.importedFrom = (String) r.get("Id");
@@ -2246,7 +2460,7 @@ public class QuickMemo {
                 store.save(n);
             }
             list.refresh();
-            JOptionPane.showMessageDialog(parent, todo.size() + "개의 메모를 가져왔습니다. 메모 목록에서 열어 보세요.", "가져오기", JOptionPane.INFORMATION_MESSAGE);
+            Ask.notice(parent, Ask.Kind.INFO, todo.size() + "개의 메모를 가져왔어요", "메모 목록에서 열어 보세요.");
             return todo.size();
         }
 
@@ -2335,9 +2549,8 @@ public class QuickMemo {
         void deleteNote(Note n, Component parent) {
             if (store.confirmDelete()) {
                 JCheckBox dontAsk = new JCheckBox("다시 묻지 않음");
-                Object[] msg = {"이 메모를 삭제할까요?", dontAsk};
-                int r = JOptionPane.showConfirmDialog(parent, msg, "메모 삭제", JOptionPane.OK_CANCEL_OPTION, JOptionPane.QUESTION_MESSAGE);
-                if (r != JOptionPane.OK_OPTION) return;
+                dontAsk.setFont(BASE_FONT.deriveFont(12.5f));
+                if (!Ask.show(parent, Ask.Kind.DANGER, "이 메모를 삭제할까요?", "삭제한 메모는 되돌릴 수 없어요.", "삭제", "취소", dontAsk)) return;
                 if (dontAsk.isSelected()) store.set("confirmDelete", "false");
             }
             NoteWindow w = windows.remove(n.id);
@@ -2623,7 +2836,7 @@ public class QuickMemo {
                 doc.insertString(pos, "\n", null);
                 pane.setCaretPosition(pos + 1);
             } catch (IOException | BadLocationException ex) {
-                JOptionPane.showMessageDialog(this, "이미지를 넣지 못했습니다: " + ex.getMessage());
+                Ask.notice(this, Ask.Kind.WARN, "그림을 넣지 못했어요", ex.getMessage());
             }
         }
 
@@ -3739,6 +3952,7 @@ public class QuickMemo {
             del.addActionListener(e -> deleteSelection());
             JButton cancel = new JButton("취소");
             cancel.putClientProperty("JButton.buttonType", "roundRect");
+            for (JButton b : new JButton[]{del, cancel}) b.setMargin(new Insets(3, 12, 3, 12));   // 좁은 창에서도 선택 수가 잘리지 않게
             cancel.addActionListener(e -> setSelecting(false));
             JPanel selBtns = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 0));
             selBtns.setOpaque(false);
@@ -3830,7 +4044,7 @@ public class QuickMemo {
             List<Card> vis = visibleCards();
             selected.retainAll(cardCache.keySet());
             long n = vis.stream().filter(c -> selected.contains(c.note.id)).count();
-            selCount.setText(n + "개 선택됨");
+            selCount.setText(n + "개 선택");
             selectAll.setSelected(n > 0 && n == vis.size());
             deleteSelected.setEnabled(n > 0);
             for (Card c : vis) c.repaint();
@@ -3840,9 +4054,8 @@ public class QuickMemo {
             List<Note> del = new ArrayList<>();
             for (Card c : visibleCards()) if (selected.contains(c.note.id)) del.add(c.note);
             if (del.isEmpty()) return;
-            int r = JOptionPane.showConfirmDialog(this, "선택한 메모 " + del.size() + "개를 삭제할까요?", "메모 삭제",
-                    JOptionPane.OK_CANCEL_OPTION, JOptionPane.WARNING_MESSAGE);
-            if (r != JOptionPane.OK_OPTION) return;
+            if (!Ask.confirm(this, Ask.Kind.DANGER, "메모 " + del.size() + "개를 삭제할까요?", "삭제한 메모는 되돌릴 수 없어요.",
+                    del.size() + "개 삭제", "취소")) return;
             app.deleteNotes(del);
             setSelecting(false);
         }
@@ -3855,6 +4068,7 @@ public class QuickMemo {
         void applyMode() {
             styleGen++;
             Color bg = bg(), fg = fg();
+            blendTitleBar(getRootPane(), bg, fg);
             getContentPane().setBackground(bg);
             for (Component c : List.of(scroll.getViewport(), (Component) scroll.getViewport().getView(), cards)) c.setBackground(bg);
             title.setForeground(fg);
@@ -3978,6 +4192,7 @@ public class QuickMemo {
                 JPanel page = new TrackWidthPanel();               // 창 너비에 맞춰 배치
                 page.setLayout(new BoxLayout(page, BoxLayout.Y_AXIS));
                 page.setBackground(pageBg());
+                blendTitleBar(getRootPane(), pageBg(), text());
                 page.setBorder(new EmptyBorder(16, 18, 16, 18));
 
                 // 디자인
