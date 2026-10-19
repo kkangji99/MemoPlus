@@ -17,14 +17,15 @@ Write-Host "QuickMemo $Version  (repo $repo)"
 
 Remove-Item build -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory build\src, build\classes, build\jar | Out-Null
+Copy-Item src\*.java build\src
 $src = $src -replace 'VERSION = "[0-9.]+"', "VERSION = `"$Version`""
 [IO.File]::WriteAllText("$PWD\build\src\QuickMemo.java", $src, (New-Object Text.UTF8Encoding $false))
 
 $flatlaf = "$PWD\lib\flatlaf-3.5.4.jar"     # modern look and feel, bundled into the jar
-javac -encoding UTF-8 -cp $flatlaf -d build\classes build\src\QuickMemo.java
+javac -encoding UTF-8 -cp $flatlaf -d build\classes (Get-ChildItem build\src\*.java | ForEach-Object FullName)
 if ($LASTEXITCODE) { throw 'javac failed' }
 # global hotkey: JDK 21 foreign function API (preview), compiled on its own; the app runs with --enable-preview
-javac --release 21 --enable-preview -encoding UTF-8 -d build\classes src\QuickMemoHotkey.java 2>$null
+javac --release 21 --enable-preview -encoding UTF-8 -d build\classes src\hotkey\QuickMemoHotkey.java 2>$null
 if ($LASTEXITCODE) { throw 'javac hotkey failed' }
 Push-Location build\classes; jar xf $flatlaf; Pop-Location
 if ($LASTEXITCODE) { throw 'flatlaf extract failed' }
