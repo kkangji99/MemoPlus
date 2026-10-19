@@ -33,7 +33,7 @@ import java.util.regex.Pattern;
 public class MemoPlus {
 
     /** 릴리스할 때마다 올린다. GitHub 릴리스 태그는 v + 이 값 */
-    static final String VERSION = "1.1.2";
+    static final String VERSION = "1.1.3";
     /** 자동 업데이트를 확인할 GitHub 저장소 (owner/name) */
     static final String UPDATE_REPO = "kkangji99/MemoPlus";
     /** 이름을 바꾸기 전 저장소 (그때 올린 릴리스 주소도 믿는다) */
@@ -1052,7 +1052,10 @@ public class MemoPlus {
                 FileChannel ch = FileChannel.open(store.dir.resolve(".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                 lock = ch.tryLock();
                 if (lock == null) {
-                    Ask.notice(null, Ask.Kind.INFO, "메모플러스가 이미 실행 중이에요", "열려 있는 메모나 메모 목록을 사용해 주세요.");
+                    // 이미 실행 중이면 그쪽에 메모 목록을 띄워 달라고 하고 끝낸다 (알림 영역에만 있어 창이 안 보일 때도 바로 쓸 수 있게).
+                    // 예전 버전처럼 대답이 없으면 안내만
+                    if (!askRunningToShow(store.dir))
+                        Ask.notice(null, Ask.Kind.INFO, "메모플러스가 이미 실행 중이에요", "알림 영역의 메모플러스 아이콘을 눌러 메모 목록을 열어 주세요.");
                     System.exit(0);
                 }
             } catch (IOException e) {
@@ -1069,6 +1072,7 @@ public class MemoPlus {
             list = new NotesListWindow(this);
             purgeExpiredTrash();
             Backup.daily(store);                                     // 하루 한 번 자동 백업 (켜 둔 채 날이 바뀌면 다음 날도)
+            watchActivation();                                       // 또 실행하면 이쪽 메모 목록을 띄운다
             if (trayEnabled()) setTray(true);
             if (hotkeyEnabled()) setHotkey(true);
             new javax.swing.Timer(60 * 1000, e -> { if (store.followSystemTheme()) syncSystemTheme(); }).start();
@@ -1664,6 +1668,47 @@ public class MemoPlus {
         }
 
         void noteChanged() { list.refresh(); }
+
+        // ---------- 하나만 실행: 두 번째 실행은 신호 파일을 남기고, 실행 중인 쪽이 메모 목록을 띄운 뒤 파일을 지운다
+        static final String ACTIVATE = ".activate";
+
+        /** 실행 중인 메모플러스에 메모 목록을 띄워 달라고 한다. 2초 안에 받아 가면(파일을 지우면) true */
+        static boolean askRunningToShow(Path dir) {
+            Path f = dir.resolve(ACTIVATE);
+            try {
+                Files.writeString(f, String.valueOf(ProcessHandle.current().pid()));
+                for (int i = 0; i < 20; i++) {
+                    if (!Files.exists(f)) return true;
+                    Thread.sleep(100);
+                }
+                Files.deleteIfExists(f);                                     // 받아 가지 않았으면(예전 버전) 치운다
+            } catch (Exception ignored) { }
+            return false;
+        }
+
+        /** 신호 파일을 기다리는 스레드 (폴더 변경 알림을 받으므로 주기적으로 확인하지 않음) */
+        void watchActivation() {
+            Path dir = store.dir, f = dir.resolve(ACTIVATE);
+            try { Files.deleteIfExists(f); } catch (IOException ignored) { }
+            Thread t = new Thread(() -> {
+                try (WatchService ws = dir.getFileSystem().newWatchService()) {
+                    dir.register(ws, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_MODIFY);
+                    while (true) {
+                        WatchKey key = ws.take();
+                        boolean hit = false;
+                        for (WatchEvent<?> ev : key.pollEvents()) if (ACTIVATE.equals(String.valueOf(ev.context()))) hit = true;
+                        key.reset();
+                        if (!hit || !Files.exists(f)) continue;
+                        try { Files.deleteIfExists(f); } catch (IOException ignored) { }
+                        SwingUtilities.invokeLater(() -> { showList(); list.toFront(); list.requestFocus(); });
+                    }
+                } catch (Exception e) {
+                    System.err.println("activation watch stopped: " + e);
+                }
+            }, "activation");
+            t.setDaemon(true);
+            t.start();
+        }
 
         void checkExit() {
             SwingUtilities.invokeLater(() -> {
